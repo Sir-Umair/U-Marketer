@@ -205,9 +205,10 @@ async def send_bulk_emails(
     follow_up_delay: int = 0,
     follow_up_body: str = None,
     auto_reply_prompt: str = None,
-    min_send_delay: float = 15.0,
-    max_send_delay: float = 45.0,
-    enable_human_pauses: bool = True,
+    delay_seconds: float = 0.0,
+    min_send_delay: float = None,
+    max_send_delay: float = None,
+    enable_human_pauses: bool = False,
     campaign_id: str = None
 ) -> dict:
     import uuid
@@ -231,8 +232,14 @@ async def send_bulk_emails(
 
     senders = valid_senders if valid_senders else raw_senders
     total_emails = len(list_of_emails)
+
+    # Determine desired custom delay between emails
+    desired_delay = float(delay_seconds) if delay_seconds and float(delay_seconds) > 0 else 0.0
+    if desired_delay == 0.0 and min_send_delay is not None and float(min_send_delay) > 0:
+        desired_delay = float(min_send_delay)
+
     print(f"[EmailService] [DISPATCH] Launching campaign {campaign_id} to {total_emails} leads across {len(senders)} sender(s): {senders}")
-    print(f"[EmailService] [PACING] Human Pacing Config: {min_send_delay}s-{max_send_delay}s randomized jitter (pauses: {enable_human_pauses})")
+    print(f"[EmailService] [CUSTOM DELAY] Email #1 sends initially (immediate). Desired delay between subsequent sends: {desired_delay}s")
 
     # Fetch lead data mapping for personalization (case-insensitive match)
     lead_map = {}
@@ -248,20 +255,10 @@ async def send_bulk_emails(
     error_messages = []
 
     for idx, recipient_email in enumerate(list_of_emails):
-        # 1. Apply human-like randomized delay between dispatches (skip before the first email)
-        if idx > 0 and max_send_delay > 0:
-            actual_min = max(0.0, min(float(min_send_delay), float(max_send_delay)))
-            actual_max = max(0.0, max(float(min_send_delay), float(max_send_delay)))
-            if actual_max > 0:
-                delay = round(random.uniform(actual_min, actual_max), 1)
-                print(f"[EmailService] [PACING] Waiting {delay}s before dispatching to {recipient_email} ({idx+1}/{total_emails})...")
-                await asyncio.sleep(delay)
-
-            # 2. Simulate human micro-pause every 10 emails (for standard paced campaigns)
-            if enable_human_pauses and (idx % 10 == 0) and actual_min >= 5.0 and (idx < total_emails):
-                micro_pause = round(random.uniform(60.0, 120.0), 1)
-                print(f"[EmailService] [PAUSE] Taking natural micro-pause ({micro_pause}s) after {idx} emails...")
-                await asyncio.sleep(micro_pause)
+        # 1. Email #1 sends initially. Subsequent emails wait the desired custom delay.
+        if idx > 0 and desired_delay > 0:
+            print(f"[EmailService] [DELAY] Waiting desired custom delay of {desired_delay}s before dispatching email #{idx+1}/{total_emails} to {recipient_email}...")
+            await asyncio.sleep(desired_delay)
 
         assigned_sender = senders[idx % len(senders)]
         lead_info = lead_map.get(recipient_email.lower().strip())

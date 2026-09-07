@@ -208,6 +208,7 @@ export const api = {
     follow_up_delay: number,
     follow_up_body?: string,
     auto_reply_prompt?: string,
+    delay_seconds?: number,
     min_send_delay?: number,
     max_send_delay?: number,
     enable_human_pauses?: boolean,
@@ -225,6 +226,9 @@ export const api = {
     if (data.auto_reply_prompt) formData.append('auto_reply_prompt', data.auto_reply_prompt);
     if (data.attachment) {
       formData.append('attachment', data.attachment);
+    }
+    if (data.delay_seconds !== undefined) {
+      formData.append('delay_seconds', data.delay_seconds.toString());
     }
     if (data.min_send_delay !== undefined) {
       formData.append('min_send_delay', data.min_send_delay.toString());

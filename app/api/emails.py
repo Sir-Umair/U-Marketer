@@ -70,9 +70,10 @@ async def send_bulk(
     follow_up_body: Optional[str] = Form(None),
     auto_reply_prompt: Optional[str] = Form(None),
     attachment: Optional[UploadFile] = File(None),
-    min_send_delay: float = Form(15.0),
-    max_send_delay: float = Form(45.0),
-    enable_human_pauses: bool = Form(True),
+    delay_seconds: float = Form(0.0),
+    min_send_delay: Optional[float] = Form(None),
+    max_send_delay: Optional[float] = Form(None),
+    enable_human_pauses: bool = Form(False),
     test_mode: bool = Form(False),
     user: dict = Depends(get_current_user)
 ):
@@ -97,20 +98,18 @@ async def send_bulk(
     if attachment and not attachment_name.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF attachments are permitted.")
 
-    # Apply test mode overrides if enabled
+    # Determine desired custom delay
+    effective_delay = float(delay_seconds) if delay_seconds > 0 else (float(min_send_delay) if min_send_delay is not None else 0.0)
     if test_mode:
-        print("[EmailService] ⚡ TEST MODE ACTIVE: Overriding to rapid 1s–3s pacing for immediate testing.")
-        min_send_delay = 1.0
-        max_send_delay = 3.0
-        enable_human_pauses = False
+        effective_delay = 1.0
 
     # Deduct 1 credit per recipient email
     cost = len(emails) * 1
     await credit_service.deduct_credits(user["email"], cost, f"Bulk Campaign Dispatch ({len(emails)} emails)")
 
     campaign_id = str(uuid.uuid4())
-    avg_delay = (min_send_delay + max_send_delay) / 2
-    estimated_duration_seconds = max(0, len(emails) - 1) * avg_delay
+    # Email #1 sends initially (0s delay). Subsequent emails take effective_delay.
+    estimated_duration_seconds = max(0, len(emails) - 1) * effective_delay
 
     # If pacing will take longer than 15s and it's not a short test, dispatch in background
     if estimated_duration_seconds > 15.0 and not test_mode:
@@ -126,9 +125,10 @@ async def send_bulk(
             follow_up_delay=follow_up_delay,
             follow_up_body=follow_up_body,
             auto_reply_prompt=auto_reply_prompt,
-            min_send_delay=min_send_delay,
-            max_send_delay=max_send_delay,
-            enable_human_pauses=enable_human_pauses,
+            delay_seconds=effective_delay,
+            min_send_delay=effective_delay,
+            max_send_delay=effective_delay,
+            enable_human_pauses=False,
             campaign_id=campaign_id
         )
 
@@ -141,7 +141,7 @@ async def send_bulk(
             "failed": 0,
             "senders_used": sender_emails or [user["email"]],
             "estimated_minutes": round(estimated_duration_seconds / 60, 1),
-            "message": f"Campaign launched in background with natural human delays ({min_send_delay}s–{max_send_delay}s). Logs are recording in real time."
+            "message": f"Campaign launched! Email #1 was sent initially. Remaining emails are sending with your custom delay of {effective_delay}s in between. Progress is tracking in real time."
         }
     else:
         result = await email_service.send_bulk_emails(
@@ -155,9 +155,10 @@ async def send_bulk(
             follow_up_delay=follow_up_delay,
             follow_up_body=follow_up_body,
             auto_reply_prompt=auto_reply_prompt,
-            min_send_delay=min_send_delay,
-            max_send_delay=max_send_delay,
-            enable_human_pauses=enable_human_pauses,
+            delay_seconds=effective_delay,
+            min_send_delay=effective_delay,
+            max_send_delay=effective_delay,
+            enable_human_pauses=False,
             campaign_id=campaign_id
         )
 

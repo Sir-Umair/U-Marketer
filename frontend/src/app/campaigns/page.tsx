@@ -49,14 +49,8 @@ export default function CampaignsPage() {
   const [sending, setSending] = useState(false);
   const [connectingAccount, setConnectingAccount] = useState(false);
 
-  // Human Pacing & Anti-Agent Detection State
-  const [pacingProfile, setPacingProfile] = useState<'natural' | 'safe' | 'fast' | 'test' | 'custom' | 'none'>('natural');
-  const [minDelaySeconds, setMinDelaySeconds] = useState(15);
-  const [maxDelaySeconds, setMaxDelaySeconds] = useState(45);
-  const [enableHumanPauses, setEnableHumanPauses] = useState(true);
-  const [simulatedSchedule, setSimulatedSchedule] = useState<any[]>([]);
-  const [simulating, setSimulating] = useState(false);
-  const [showCadencePreview, setShowCadencePreview] = useState(false);
+  // Custom Delay Between Sends (Email #1 sends initially; subsequent emails wait desired delay)
+  const [delayBetweenEmails, setDelayBetweenEmails] = useState<number>(10);
 
   useEffect(() => {
     const init = async () => {
@@ -145,50 +139,6 @@ export default function CampaignsPage() {
       .replace(/(\{company\}|\\company|\[company\]|\$company)/gi, company)
       .replace(/(\{email\}|\\email|\[email\]|\$email)/gi, lead.email)
       .replace(/(\{notes\}|\\notes|\[notes\]|\$notes)/gi, notes);
-  };
-
-  const handlePacingProfileChange = (profile: 'natural' | 'safe' | 'fast' | 'test' | 'custom' | 'none') => {
-    setPacingProfile(profile);
-    if (profile === 'natural') {
-      setMinDelaySeconds(15);
-      setMaxDelaySeconds(45);
-      setEnableHumanPauses(true);
-    } else if (profile === 'safe') {
-      setMinDelaySeconds(30);
-      setMaxDelaySeconds(90);
-      setEnableHumanPauses(true);
-    } else if (profile === 'fast') {
-      setMinDelaySeconds(5);
-      setMaxDelaySeconds(15);
-      setEnableHumanPauses(false);
-    } else if (profile === 'test') {
-      setMinDelaySeconds(1);
-      setMaxDelaySeconds(3);
-      setEnableHumanPauses(false);
-    } else if (profile === 'none') {
-      setMinDelaySeconds(0);
-      setMaxDelaySeconds(0);
-      setEnableHumanPauses(false);
-    }
-  };
-
-  const handleSimulateCadence = async () => {
-    try {
-      setSimulating(true);
-      const count = selectedEmails.length > 0 ? selectedEmails.length : 5;
-      const res = await api.simulateCadence({
-        count,
-        min_delay: minDelaySeconds,
-        max_delay: maxDelaySeconds,
-        enable_human_pauses: enableHumanPauses
-      });
-      setSimulatedSchedule(res.schedule || []);
-      setShowCadencePreview(true);
-    } catch (err: any) {
-      alert('Could not simulate cadence: ' + err.message);
-    } finally {
-      setSimulating(false);
-    }
   };
 
   const executeGenerateAI = async (leadsToUse: any[], isGeneric: boolean = false) => {
@@ -328,14 +278,15 @@ export default function CampaignsPage() {
         follow_up_delay: finalDelay,
         follow_up_body: isCustomFollowUp ? followUpBody : undefined,
         auto_reply_prompt: autoReplyPrompt || undefined,
-        min_send_delay: minDelaySeconds,
-        max_send_delay: maxDelaySeconds,
-        enable_human_pauses: enableHumanPauses,
-        test_mode: pacingProfile === 'test'
+        delay_seconds: delayBetweenEmails,
+        min_send_delay: delayBetweenEmails,
+        max_send_delay: delayBetweenEmails,
+        enable_human_pauses: false,
+        test_mode: false
       });
 
       if (result.is_background || result.status === 'queued') {
-        alert(`🚀 Campaign Dispatched with Human Pacing!\n\nCadence: ${minDelaySeconds}s–${maxDelaySeconds}s randomized delays.\nEstimated duration: ~${result.estimated_minutes || 1} min.\n\nEmails are being dispatched naturally in the background so recipients and mail servers treat them as authentic manual emails. You can navigate away safely; live progress is tracking in your Dashboard & Responses.`);
+        alert(`🚀 Campaign Launched!\n\nEmail #1 was sent initially.\nSubsequent emails are sending with your custom delay of ${delayBetweenEmails}s in between.\nEstimated duration: ~${result.estimated_minutes || 1} min.\n\nYou can navigate away safely; live progress is tracking in real time.`);
         setSubject('');
         setBody('');
         setFollowUpBody('');
@@ -344,7 +295,7 @@ export default function CampaignsPage() {
         setAttachment(null);
         setSelectedEmails([]);
       } else if (result.failed === 0) {
-        alert(`🚀 Campaign complete! Successfully sent to all ${result.successful} leads${pacingProfile === 'test' ? ' (Test Mode: 1-3s delay)' : ''} using ${result.senders_used ? result.senders_used.length : 1} sender account(s).`);
+        alert(`🚀 Campaign complete! Successfully sent to all ${result.successful} leads using ${result.senders_used ? result.senders_used.length : 1} sender account(s).`);
         setSubject('');
         setBody('');
         setFollowUpBody('');
@@ -861,248 +812,121 @@ export default function CampaignsPage() {
             </div>
           </section>
 
-          {/* Step 5: Human-Like Sending Cadence & Anti-Agent Detection */}
-          <section className="card" style={{ borderLeft: '4px solid #10b981', background: '#f0fdf4' }}>
+          {/* Step 5: Custom Sending Delays */}
+          <section className="card" style={{ borderLeft: '4px solid var(--primary)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span style={{ background: '#10b981', color: 'white', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.875rem', fontWeight: 'bold' }}>5</span>
+                <span style={{ background: 'var(--primary)', color: 'white', width: '28px', height: '28px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.875rem', fontWeight: 'bold' }}>5</span>
                 <div>
-                  <h3 style={{ margin: 0 }}>Human-Like Cadence & Anti-Detection</h3>
-                  <p style={{ margin: 0, fontSize: '0.8rem', color: '#166534' }}>
-                    Randomized delays disguise automated agent signatures and protect sender deliverability.
+                  <h3 style={{ margin: 0 }}>Custom Delay Between Sends</h3>
+                  <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>
+                    Email #1 sends initially (immediate). Subsequent emails wait your desired custom delay in between.
                   </p>
                 </div>
               </div>
               <span style={{ 
-                background: pacingProfile === 'test' ? '#fef3c7' : '#dcfce7', 
-                color: pacingProfile === 'test' ? '#92400e' : '#15803d', 
-                padding: '0.25rem 0.6rem', 
+                background: delayBetweenEmails === 0 ? 'var(--muted)' : '#dcfce7', 
+                color: delayBetweenEmails === 0 ? 'var(--muted-foreground)' : '#15803d', 
+                padding: '0.25rem 0.65rem', 
                 borderRadius: '999px', 
                 fontSize: '0.75rem', 
                 fontWeight: 700,
-                border: pacingProfile === 'test' ? '1px solid #fcd34d' : '1px solid #86efac'
+                border: delayBetweenEmails === 0 ? '1px solid var(--border)' : '1px solid #86efac'
               }}>
-                {pacingProfile === 'test' ? '⚡ QA Test Mode Active (1-3s)' : '🛡️ Anti-Spam Protected'}
+                {delayBetweenEmails === 0 ? '⚡ Instant (No delay)' : `⏱️ ${delayBetweenEmails}s Delay Active`}
               </span>
             </div>
 
             <div className="form-group">
-              <label className="label" style={{ marginBottom: '0.5rem', display: 'block' }}>Choose Dispatch Pacing Profile:</label>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-                {/* 1. Natural Human */}
-                <div 
-                  onClick={() => handlePacingProfileChange('natural')}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: pacingProfile === 'natural' ? '2px solid #10b981' : '1px solid #e2e8f0',
-                    background: pacingProfile === 'natural' ? '#ecfdf5' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 600, fontSize: '0.875rem', color: '#1e293b' }}>
-                    👤 Natural Human <span style={{ fontSize: '0.65rem', background: '#bbf7d0', color: '#166534', padding: '0.1rem 0.35rem', borderRadius: '4px' }}>Recommended</span>
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
-                    15s–45s randomized delay. Mimics authentic typing & manual dispatch.
-                  </div>
-                </div>
+              <label className="label" style={{ marginBottom: '0.6rem', display: 'block' }}>
+                Desired Delay Between Each Email:
+              </label>
 
-                {/* 2. Safe Warmup */}
-                <div 
-                  onClick={() => handlePacingProfileChange('safe')}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: pacingProfile === 'safe' ? '2px solid #10b981' : '1px solid #e2e8f0',
-                    background: pacingProfile === 'safe' ? '#ecfdf5' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#1e293b' }}>
-                    🛡️ Safe Warmup
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
-                    30s–90s delay. Ideal for fresh accounts & cold outreach deliverability.
-                  </div>
-                </div>
-
-                {/* 3. Fast Pacing */}
-                <div 
-                  onClick={() => handlePacingProfileChange('fast')}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: pacingProfile === 'fast' ? '2px solid #10b981' : '1px solid #e2e8f0',
-                    background: pacingProfile === 'fast' ? '#ecfdf5' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#1e293b' }}>
-                    🚀 Fast Pacing
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
-                    5s–15s delay. High throughput for seasoned accounts.
-                  </div>
-                </div>
-
-                {/* 4. Test Mode */}
-                <div 
-                  onClick={() => handlePacingProfileChange('test')}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: pacingProfile === 'test' ? '2px solid #f59e0b' : '1px solid #e2e8f0',
-                    background: pacingProfile === 'test' ? '#fef3c7' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#92400e' }}>
-                    ⚡ Test Mode (QA)
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#78350f', marginTop: '0.25rem' }}>
-                    1s–3s delay. Fast end-to-end testing without waiting.
-                  </div>
-                </div>
-
-                {/* 5. Custom */}
-                <div 
-                  onClick={() => handlePacingProfileChange('custom')}
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: pacingProfile === 'custom' ? '2px solid #10b981' : '1px solid #e2e8f0',
-                    background: pacingProfile === 'custom' ? '#ecfdf5' : 'white',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: '0.875rem', color: '#1e293b' }}>
-                    ⚙️ Custom Delay
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.25rem' }}>
-                    Set custom min & max seconds range.
-                  </div>
-                </div>
+              {/* Quick Select Presets */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
+                {[
+                  { label: '⚡ 0s (Instant)', val: 0 },
+                  { label: '5 sec', val: 5 },
+                  { label: '10 sec', val: 10 },
+                  { label: '15 sec', val: 15 },
+                  { label: '30 sec', val: 30 },
+                  { label: '60 sec (1 min)', val: 60 },
+                  { label: '120 sec (2 min)', val: 120 }
+                ].map((preset) => (
+                  <button
+                    key={preset.val}
+                    type="button"
+                    onClick={() => setDelayBetweenEmails(preset.val)}
+                    style={{
+                      padding: '0.5rem 0.9rem',
+                      borderRadius: '8px',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      border: '1px solid',
+                      borderColor: delayBetweenEmails === preset.val ? 'var(--primary)' : 'var(--border)',
+                      background: delayBetweenEmails === preset.val ? 'rgba(99, 102, 241, 0.12)' : 'var(--card)',
+                      color: delayBetweenEmails === preset.val ? 'var(--primary)' : 'var(--foreground)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
 
-              {/* Custom Range Inputs */}
-              {pacingProfile === 'custom' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'white', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.85rem', color: '#475569' }}>Min Delay:</span>
-                    <input 
-                      type="number" 
-                      className="input" 
-                      min="0" 
-                      max="300"
-                      value={minDelaySeconds} 
-                      onChange={e => setMinDelaySeconds(Math.max(0, parseInt(e.target.value) || 0))}
-                      style={{ width: '80px' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>sec</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <span style={{ fontSize: '0.85rem', color: '#475569' }}>Max Delay:</span>
-                    <input 
-                      type="number" 
-                      className="input" 
-                      min="0" 
-                      max="300"
-                      value={maxDelaySeconds} 
-                      onChange={e => setMaxDelaySeconds(Math.max(0, parseInt(e.target.value) || 0))}
-                      style={{ width: '80px' }}
-                    />
-                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>sec</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Micro-pauses Checkbox */}
-              {pacingProfile !== 'test' && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                  <input 
-                    type="checkbox" 
-                    checked={enableHumanPauses} 
-                    onChange={e => setEnableHumanPauses(e.target.checked)}
-                    style={{ width: '16px', height: '16px' }}
-                  />
-                  <span style={{ fontSize: '0.85rem', color: '#1e293b' }}>
-                    Simulate natural human micro-pauses (1–2 min break every 10 emails to disrupt machine frequency)
-                  </span>
-                </label>
-              )}
-
-              {/* Pacing Summary & Simulator Tool */}
+              {/* Custom Number Input */}
               <div style={{ 
-                background: 'white', 
-                border: '1px solid #bbf7d0', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '0.75rem', 
+                background: 'var(--card)', 
+                padding: '0.85rem 1rem', 
                 borderRadius: '8px', 
-                padding: '0.75rem 1rem', 
+                border: '1px solid var(--border)',
+                marginBottom: '1rem',
+                flexWrap: 'wrap'
+              }}>
+                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--foreground)' }}>
+                  Enter Desired Seconds:
+                </span>
+                <input 
+                  type="number" 
+                  className="input" 
+                  min="0" 
+                  max="3600"
+                  value={delayBetweenEmails} 
+                  onChange={e => setDelayBetweenEmails(Math.max(0, parseInt(e.target.value) || 0))}
+                  style={{ width: '100px', padding: '0.5rem 0.75rem', fontSize: '0.9rem' }}
+                />
+                <span style={{ fontSize: '0.85rem', color: 'var(--muted-foreground)' }}>
+                  seconds delay between each subsequent email send
+                </span>
+              </div>
+
+              {/* Dispatch Timeline Summary */}
+              <div style={{ 
+                background: 'rgba(99, 102, 241, 0.05)', 
+                border: '1px solid rgba(99, 102, 241, 0.2)', 
+                borderRadius: '8px', 
+                padding: '0.85rem 1rem', 
                 display: 'flex', 
                 justifyContent: 'space-between', 
                 alignItems: 'center', 
                 flexWrap: 'wrap', 
                 gap: '0.75rem' 
               }}>
-                <div style={{ fontSize: '0.85rem', color: '#166534' }}>
-                  <strong>⏱️ Estimated Timeline:</strong> ~{
+                <div style={{ fontSize: '0.85rem', color: 'var(--foreground)' }}>
+                  <strong>🚀 Dispatch Sequence:</strong> Email #1 sends initially. Each following email waits {delayBetweenEmails}s before sending.
+                </div>
+                <div style={{ fontSize: '0.825rem', color: 'var(--primary)', fontWeight: 600 }}>
+                  ⏱️ Estimated Duration: ~{
                     selectedEmails.length <= 1 
-                      ? 'Instant (Single send)' 
-                      : `${Math.max(0.1, Math.round(((selectedEmails.length - 1) * ((minDelaySeconds + maxDelaySeconds) / 2)) / 6) / 10)} minutes for ${selectedEmails.length} recipient(s)`
+                      ? 'Instant (1 email)' 
+                      : `${Math.max(0.1, Math.round(((selectedEmails.length - 1) * delayBetweenEmails) / 60 * 10) / 10)} min for ${selectedEmails.length} recipients`
                   }
                 </div>
-
-                <button 
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={handleSimulateCadence}
-                  disabled={simulating}
-                  style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem', borderColor: '#10b981', color: '#059669' }}
-                >
-                  {simulating ? 'Calculating...' : '🧪 Preview Simulated Schedule'}
-                </button>
               </div>
-
-              {/* Cadence Preview Drawer */}
-              {showCadencePreview && simulatedSchedule.length > 0 && (
-                <div style={{ marginTop: '0.75rem', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '0.75rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
-                      Simulated Dispatch Sequence ({simulatedSchedule.length} emails):
-                    </span>
-                    <button 
-                      onClick={() => setShowCadencePreview(false)}
-                      style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '0.75rem' }}
-                    >
-                      ✕ Close
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto' }}>
-                    {simulatedSchedule.map((item, i) => (
-                      <div key={i} style={{ 
-                        background: 'white', 
-                        border: '1px solid #e2e8f0', 
-                        padding: '0.3rem 0.6rem', 
-                        borderRadius: '6px', 
-                        fontSize: '0.725rem',
-                        display: 'flex',
-                        gap: '0.4rem',
-                        alignItems: 'center'
-                      }}>
-                        <span style={{ fontWeight: 700, color: '#6366f1' }}>#{item.email_number}</span>
-                        <span style={{ color: '#64748b' }}>delay: {item.delay_before_send_seconds}s</span>
-                        <span style={{ color: '#059669', fontWeight: 600 }}>({item.approx_timestamp_formatted})</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </section>
 
