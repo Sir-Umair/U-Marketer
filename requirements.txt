@@ -1,21 +1,25 @@
-# Flask & CORS
-flask
-flask-cors
-
-# LangChain core & components
+fastapi
+uvicorn
+motor
+pydantic
+pydantic-settings
+python-dotenv
+email-validator
+anthropic
+gspread
+oauth2client
+python-multipart
+langgraph
+langchain-anthropic
+langchain-google-genai
+google-generativeai
 langchain
 langchain-core
-langchain-community
-langchain-anthropic
-langchain-huggingface
-langchain-text-splitters
-
-# Vector Stores
-faiss-cpu
-
-# Document loaders
-pdfminer.six
-
-# Other
-python-dotenv
-sentence-transformers
+google-auth
+google-auth-oauthlib
+google-api-python-client
+cryptography
+python-jose[cryptography]
+dnspython
+watchfiles
+openpyxl

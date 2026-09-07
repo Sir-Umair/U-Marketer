@@ -169,12 +169,12 @@ export default function ResponsesPage() {
         </div>
       )}
       
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1>Campaign Responses</h1>
           <p>Track all registered emails per campaign and view AI auto-replies.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={exportCSV} disabled={campaigns.length === 0}>
             Export CSV
           </button>
@@ -184,7 +184,7 @@ export default function ResponsesPage() {
         </div>
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card table-container" style={{ padding: 0 }}>
         {loading ? (
           <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>
             Loading campaigns...

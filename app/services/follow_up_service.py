@@ -31,8 +31,15 @@ class FollowUpService:
             async with semaphore:
                 user_email = log.get("user_email")
                 
-                # Check if automation is paused for this user
+                # Check if automation is paused or auth is expired for this user
                 if user_email:
+                    from app.db import users_collection
+                    if users_collection is not None:
+                        user_doc = await users_collection.find_one({"email": user_email})
+                        if user_doc and user_doc.get("auth_status") == "expired":
+                            print(f"[FollowUp] SKIPPED: Authentication expired for {user_email}")
+                            return None
+
                     user_settings = await settings_collection.find_one({"user_email": user_email})
                     if user_settings and not user_settings.get("auto_reply_enabled", True):
                         print(f"[FollowUp] SKIPPED: Automation is paused for {user_email}")

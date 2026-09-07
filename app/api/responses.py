@@ -7,26 +7,26 @@ router = APIRouter(prefix="/responses", tags=["Responses"])
 
 
 def _serialize(doc: dict) -> dict:
+    if not doc:
+        return doc
     doc["id"] = str(doc.pop("_id"))
-    if "timestamp" in doc:
-        doc["timestamp"] = doc["timestamp"].isoformat()
+    if "timestamp" in doc and doc["timestamp"]:
+        if hasattr(doc["timestamp"], "isoformat"):
+            doc["timestamp"] = doc["timestamp"].isoformat()
+        else:
+            doc["timestamp"] = str(doc["timestamp"])
     return doc
 
 
-@router.get("/")
-async def get_responses(limit: int = 100, user: dict = Depends(get_current_user)):
-    """Returns all logged client email responses from MongoDB."""
-    if email_logs_collection is None:
-        return []
-        
-    # We fetch records that have an 'intent' field, which indicates they were processed by our AI auto-reply system.
-    # We filter by user_email to ensure privacy and only show relevant records for the logged-in user.
-    cursor = email_logs_collection.find(
-        {"user_email": user["email"], "intent": {"$exists": True}}
-    ).sort("timestamp", -1).limit(limit)
-    
-    docs = await cursor.to_list(length=limit)
-    return [_serialize(doc) for doc in docs]
+def _get_log_date_str(log: dict) -> str:
+    ts = log.get("timestamp")
+    if not ts:
+        return "unknown"
+    if hasattr(ts, "date"):
+        return str(ts.date())
+    if isinstance(ts, str):
+        return ts.split("T")[0]
+    return str(ts)
 
 
 def clean_subject(subject: str) -> str:
@@ -68,7 +68,7 @@ async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
     for log in sent_logs:
         subject = log.get("subject", "")
         # Use campaign_id or a normalized subject+date for legacy logs
-        c_id = log.get("campaign_id") or f"legacy-{clean_subject(subject)}-{log.get('timestamp').date()}"
+        c_id = log.get("campaign_id") or f"legacy-{clean_subject(subject)}-{_get_log_date_str(log)}"
         recipient = log.get("recipient")
         
         # Deduplicate leads within a campaign (e.g. if follow-ups were sent)
@@ -78,10 +78,12 @@ async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
         processed_leads.add(lead_key)
 
         if c_id not in campaigns:
+            ts_val = log.get("timestamp")
+            ts_iso = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val) if ts_val else ""
             campaigns[c_id] = {
                 "id": c_id,
                 "subject": subject if not log.get("campaign_id") else subject, # Keep original subject
-                "timestamp": log.get("timestamp").isoformat(),
+                "timestamp": ts_iso,
                 "leads": []
             }
         
@@ -118,23 +120,14 @@ async def delete_campaign(campaign_id: str, user: dict = Depends(get_current_use
         return {"error": "DB not available"}
     
     if campaign_id.startswith("legacy-"):
-        # For legacy IDs, we grouped by normalized subject and date.
-        # Format: legacy-{normalized_subject}-{date}
-        # We'll try to find logs that would generate this same ID.
-        # Since we can't easily reverse the normalization in a query, 
-        # we'll fetch candidate logs and filter them, or better, 
-        # just delete by the calculated components if we can.
-        
-        # A more robust way: Find all sent logs for this user, 
-        # calculate their legacy IDs, and delete those that match.
         all_sent = await email_logs_collection.find({"user_email": user["email"], "type": "sent"}).to_list(length=None)
         ids_to_delete = []
         for log in all_sent:
             subj = log.get("subject", "")
-            dt = log.get("timestamp").date()
-            generated_id = f"legacy-{clean_subject(subj)}-{dt}"
+            generated_id = f"legacy-{clean_subject(subj)}-{_get_log_date_str(log)}"
             if generated_id == campaign_id:
                 ids_to_delete.append(log["_id"])
+
         
         if not ids_to_delete:
             return {"deleted_count": 0}

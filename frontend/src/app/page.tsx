@@ -175,12 +175,12 @@ export default function Dashboard() {
           {toast.message}
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1>Dashboard Overview</h1>
           <p>Welcome back to U-marketer. Here&apos;s your performance summary.</p>
         </div>
-        <div style={{ display: 'flex', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <button 
             className="btn" 
             style={{ backgroundColor: autoReplyEnabled ? '#ef4444' : '#10b981' }} 

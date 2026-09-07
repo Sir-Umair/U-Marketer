@@ -2,27 +2,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
-from app.api import leads, emails, settings, responses, logs, auth
+from app.api import leads, emails, settings, responses, logs, auth, developer
 from app.services.follow_up_service import follow_up_service
 from app.services.auto_reply_service import auto_reply_service
 
 async def background_monitoring_task():
-    """Runs continuously in the background to sync emails and send follow-ups."""
+    """Runs continuously in the background to sync emails across all connected accounts and send follow-ups."""
     while True:
         try:
             print("[Background Worker] Executing auto-reply and follow-up checks...")
-            # 1. Process incoming replies (detects reply_received=True)
-            # await auto_reply_service.check_and_reply_to_emails(user_email="...") 
-            # Wait, auto_reply_service needs a specific user email! 
-            # For a multi-user scalable system, we should query all connected users with valid tokens and run the check.
-            from app.db import users_collection
-            if users_collection is not None:
-                users = await users_collection.find({"access_token": {"$exists": True}}).to_list(length=None)
-                for u in users:
-                    try:
-                        await auto_reply_service.check_and_reply_to_emails(u["email"])
-                    except Exception as e:
-                        print(f"Error checking emails for {u['email']}: {e}")
+            # 1. Process incoming replies for all connected accounts concurrently
+            await auto_reply_service.check_all_accounts_replies()
             
             # 2. Send pending AI automated follow-ups
             await follow_up_service.process_pending_follow_ups()
@@ -30,7 +20,7 @@ async def background_monitoring_task():
         except Exception as e:
             print(f"[Background Worker] Error: {e}")
             
-        await asyncio.sleep(30) # Run every 30 seconds for more responsiveness
+        await asyncio.sleep(120) # Run every 2 minutes to prevent Google API rate limits
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,7 +40,13 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+    ],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,6 +54,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(auth.router)
+app.include_router(developer.router)
 app.include_router(leads.router)
 app.include_router(emails.router)
 app.include_router(settings.router)

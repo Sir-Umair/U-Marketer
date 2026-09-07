@@ -7,9 +7,14 @@ router = APIRouter(prefix="/logs", tags=["Logs"])
 
 
 def _serialize(doc: dict) -> dict:
+    if not doc:
+        return doc
     doc["id"] = str(doc.pop("_id"))
-    if "timestamp" in doc:
-        doc["timestamp"] = doc["timestamp"].isoformat()
+    if "timestamp" in doc and doc["timestamp"]:
+        if hasattr(doc["timestamp"], "isoformat"):
+            doc["timestamp"] = doc["timestamp"].isoformat()
+        else:
+            doc["timestamp"] = str(doc["timestamp"])
     return doc
 
 

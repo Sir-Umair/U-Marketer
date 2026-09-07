@@ -10,6 +10,29 @@ import asyncio
 import traceback
 
 class AutoReplyService:
+    async def check_all_accounts_replies(self):
+        """Iterates over all active Gmail accounts in users_collection and processes inboxes concurrently."""
+        from app.db import users_collection
+        if users_collection is None:
+            return {"status": "error", "message": "Database not connected"}
+
+        try:
+            active_users = await users_collection.find({
+                "access_token": {"$exists": True},
+                "auth_status": {"$ne": "expired"}
+            }).to_list(100)
+            if not active_users:
+                print("[AutoReply] No active connected user accounts found.")
+                return {"status": "success", "accounts": 0}
+
+            print(f"[AutoReply] Running concurrent inbox check for {len(active_users)} connected account(s)...")
+            tasks = [self.check_and_reply_to_emails(u["email"]) for u in active_users if "email" in u]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            return {"status": "success", "accounts": len(tasks), "results": results}
+        except Exception as e:
+            print(f"[AutoReply] Error in check_all_accounts_replies: {e}")
+            return {"status": "error", "message": str(e)}
+
     def _get_recursive_body(self, payload) -> str:
         """Helper to recursively find text/plain body in nested email parts."""
         # 1. Check if this part itself is the text body
@@ -105,9 +128,18 @@ class AutoReplyService:
             }
 
         except Exception as e:
-            print(f"Error in auto-reply service for {user_email}: {e}")
-            import traceback
-            traceback.print_exc()
+            err_str = str(e)
+            if "429" in err_str or "rateLimitExceeded" in err_str or "User-rate limit exceeded" in err_str:
+                print(f"[AutoReply] Gmail API Rate Limit exceeded for {user_email}. Pausing until next cycle.")
+                return {"status": "rate_limited", "message": "Rate limit exceeded. Will retry automatically."}
+            elif "invalid_grant" in err_str or "Authentication expired" in err_str or "RefreshError" in type(e).__name__:
+                from app.services.email_service import mark_user_auth_expired
+                await mark_user_auth_expired(user_email, "Authentication expired. Please reconnect your Gmail account.")
+                print(f"[AutoReply] Authentication expired or invalid for {user_email}. User needs to reconnect Gmail account.")
+            else:
+                print(f"[AutoReply] Error in auto-reply service for {user_email}: {e}")
+                import traceback
+                traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
     async def _process_single_message(self, creds, user_email: str, msg_id: str, auto_reply_enabled: bool = True):

@@ -1,6 +1,26 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.config import settings
 
+def get_connection_url(raw_url: str) -> str:
+    """
+    Ensures robust MongoDB connection.
+    If using mongodb+srv on Windows where DNS TXT/SRV resolution is blocked or throttled by local network/ISP,
+    this automatically routes to the direct shard replica-set hosts for instant connection.
+    """
+    if not raw_url:
+        return "mongodb://localhost:27017"
+        
+    if "cluster0.y6udkhq.mongodb.net" in raw_url and raw_url.startswith("mongodb+srv://"):
+        return (
+            "mongodb://developerumairabrar_db_user:viMhzDrbvO12dU4Y@"
+            "ac-pzteteo-shard-00-00.y6udkhq.mongodb.net:27017,"
+            "ac-pzteteo-shard-00-01.y6udkhq.mongodb.net:27017,"
+            "ac-pzteteo-shard-00-02.y6udkhq.mongodb.net:27017"
+            "/email_marketer?ssl=true&authSource=admin&retryWrites=true&w=majority&appName=Cluster0"
+        )
+    return raw_url
+
+
 class DBManager:
     def __init__(self):
         self._client = None
@@ -8,14 +28,16 @@ class DBManager:
 
     def get_db(self):
         if self._db is None:
-            print(f"DEBUG: Lazy initializing MongoDB client for {settings.mongodb_url[:20]}...")
+            mongo_uri = get_connection_url(settings.mongodb_url)
+            print(f"[DB] Initializing MongoDB client connection...")
             self._client = AsyncIOMotorClient(
-                settings.mongodb_url,
-                serverSelectionTimeoutMS=10000,
-                connectTimeoutMS=10000,
+                mongo_uri,
+                serverSelectionTimeoutMS=8000,
+                connectTimeoutMS=8000,
                 retryWrites=True
             )
-            self._db = self._client.email_marketer
+            # Extract database name or default to email_marketer
+            self._db = self._client.get_database("email_marketer")
         return self._db
 
 _manager = DBManager()

@@ -75,13 +75,13 @@ export default function CampaignDashboard() {
   }
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3rem' }}>
+    <div style={{ padding: '0.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '2.5rem', fontWeight: 800, marginBottom: '0.5rem', background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+          <h1 style={{ fontSize: '2.25rem', fontWeight: 800, marginBottom: '0.5rem', background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             Campaign Intelligence
           </h1>
-          <p style={{ color: 'var(--muted-foreground)', fontSize: '1.1rem' }}>Detailed breakdown of lead engagement per outreach campaign.</p>
+          <p style={{ color: 'var(--muted-foreground)', fontSize: '1.05rem' }}>Detailed breakdown of lead engagement per outreach campaign.</p>
         </div>
         <button 
           className="btn" 
@@ -183,7 +183,7 @@ export default function CampaignDashboard() {
                 {/* Lead List */}
                 {isExpanded && (
                   <div style={{ borderTop: '1px solid var(--border)', padding: '1rem' }}>
-                    <div style={{ background: '#f9fafb', borderRadius: '12px', overflow: 'hidden' }}>
+                    <div className="table-container" style={{ background: '#f9fafb', borderRadius: '12px' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                           <tr style={{ background: '#f1f5f9', color: '#64748b', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>

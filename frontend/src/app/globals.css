@@ -60,9 +60,30 @@ button {
 .app-container {
   display: flex;
   min-height: 100vh;
+  position: relative;
 }
 
-/* Sidebar Utilities */
+/* Mobile Header (Hidden on Desktop) */
+.mobile-header {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  padding: 0.875rem 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.mobile-close-btn {
+  display: none;
+}
+
+.mobile-backdrop {
+  display: none;
+}
+
+/* Sidebar Desktop Utilities */
 .sidebar {
   width: 260px;
   background: var(--card);
@@ -73,6 +94,8 @@ button {
   position: sticky;
   top: 0;
   height: 100vh;
+  z-index: 50;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .main-content {
@@ -139,9 +162,22 @@ p { color: var(--muted-foreground); line-height: 1.5; }
   margin-bottom: 2rem;
 }
 
+.responsive-split {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 2rem;
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
 /* Table Utilities */
 .table-container {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--card);
@@ -193,7 +229,73 @@ td {
   font-weight: 500;
   margin-bottom: 0.5rem;
 }
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* Mobile & Small Screen Media Queries */
+@media (max-width: 1024px) {
+  .responsive-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .mobile-header {
+    display: block;
+  }
+
+  .mobile-close-btn {
+    display: inline-block;
+  }
+
+  .mobile-backdrop {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 45;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100vh;
+    width: 280px;
+    transform: translateX(-100%);
+    box-shadow: none;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.25);
+  }
+
+  .main-content {
+    padding: 1.25rem 1rem;
+  }
+
+  .grid-2col {
+    grid-template-columns: 1fr;
+  }
+
+  .grid-stats {
+    grid-template-columns: 1fr;
+  }
+
+  h1 { font-size: 1.65rem; margin-bottom: 1rem; }
+  h2 { font-size: 1.3rem; }
+  h3 { font-size: 1.05rem; }
 }

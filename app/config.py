@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     email_pass: str = ""
     
     # AI Configuration
+    gemini_api_key: str = ""
+    google_api_key: str = ""
+    gemini_model: str = "gemini-1.5-flash"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
 
