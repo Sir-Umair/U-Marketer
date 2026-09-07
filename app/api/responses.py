@@ -92,13 +92,33 @@ async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
         response = next((r for r in all_responses if r.get("email") == recipient and 
                          (r.get("campaign_id") == log.get("campaign_id") or r.get("thread_id") == log.get("thread_id"))), None)
         
+        lead_ts = log.get("timestamp")
+        lead_ts_str = lead_ts.isoformat() if hasattr(lead_ts, "isoformat") else str(lead_ts) if lead_ts else ""
+
         campaigns[c_id]["leads"].append({
             "email": recipient,
             "replied": response is not None,
-            "response": _serialize(response) if response else None
+            "response": _serialize(response) if response else None,
+            "sent_at": lead_ts_str,
+            "subject": log.get("subject", ""),
+            "body": log.get("body", ""),
+            "thread_id": log.get("thread_id", ""),
+            "follow_up_delay": log.get("follow_up_delay"),
+            "follow_up_sent": log.get("follow_up_sent", False)
         })
 
-    return list(campaigns.values())
+    # Compute high-level campaign summary stats
+    campaign_list = list(campaigns.values())
+    for camp in campaign_list:
+        leads = camp.get("leads", [])
+        total = len(leads)
+        replies = sum(1 for l in leads if l.get("replied"))
+        camp["total_leads"] = total
+        camp["emails_sent"] = total
+        camp["replies_count"] = replies
+        camp["reply_rate"] = round((replies / total) * 100, 1) if total > 0 else 0
+
+    return campaign_list
 
 
 @router.get("/thread/{thread_id}")

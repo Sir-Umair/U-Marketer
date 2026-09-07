@@ -276,6 +276,7 @@ td {
     width: 280px;
     transform: translateX(-100%);
     box-shadow: none;
+    z-index: 50;
   }
 
   .sidebar.open {
@@ -284,7 +285,9 @@ td {
   }
 
   .main-content {
-    padding: 1.25rem 1rem;
+    padding: 1rem 0.75rem;
+    max-width: 100vw;
+    overflow-x: hidden;
   }
 
   .grid-2col {
@@ -293,9 +296,19 @@ td {
 
   .grid-stats {
     grid-template-columns: 1fr;
+    gap: 1rem;
   }
 
-  h1 { font-size: 1.65rem; margin-bottom: 1rem; }
-  h2 { font-size: 1.3rem; }
+  .table-container {
+    border-radius: var(--radius);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-container table {
+    min-width: 580px;
+  }
+
+  h1 { font-size: 1.5rem; margin-bottom: 0.75rem; }
+  h2 { font-size: 1.25rem; }
   h3 { font-size: 1.05rem; }
 }

@@ -29,6 +29,8 @@ export default function Dashboard() {
     aiCredits: 'Unlimited',
   });
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [activityTab, setActivityTab] = useState<'campaigns' | 'events'>('campaigns');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
@@ -80,10 +82,11 @@ export default function Dashboard() {
 
   async function fetchDashboardData() {
     try {
-      const [leads, recentLogs, dashboardStats] = await Promise.all([
+      const [leads, recentLogs, dashboardStats, campaignList] = await Promise.all([
         api.getLeads().catch(() => []),
         api.getRecentLogs(50).catch(() => []),
-        api.getStats().catch(() => ({ sent: 0, replies: 0 }))
+        api.getStats().catch(() => ({ sent: 0, replies: 0 })),
+        api.getCampaignDashboard().catch(() => [])
       ]);
 
       setStats({
@@ -93,6 +96,7 @@ export default function Dashboard() {
         aiCredits: 'Unlimited',
       });
       setLogs(recentLogs);
+      setCampaigns(Array.isArray(campaignList) ? campaignList : []);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     } finally {
@@ -218,115 +222,274 @@ export default function Dashboard() {
       </div>
 
       <section style={{ marginTop: '3rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          marginBottom: '1.5rem', 
+          flexWrap: 'wrap', 
+          gap: '1rem' 
+        }}>
           <div>
-            <h2>Recent Activity</h2>
-            <p>Your latest automated marketing actions — live from the database.</p>
+            <h2 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 700 }}>
+              {activityTab === 'campaigns' ? 'Campaign Records Management' : 'Individual Activity Log'}
+            </h2>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--muted-foreground)' }}>
+              {activityTab === 'campaigns' 
+                ? 'Each campaign is organized as an independent record with live response tracking.'
+                : 'Raw system event log of all inbound client responses and outbound dispatches.'}
+            </p>
           </div>
-          <button className="btn btn-outline" onClick={() => router.push('/responses')}>View All Responses</button>
+
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* View Switcher Tabs */}
+            <div style={{ display: 'flex', borderRadius: '8px', border: '1px solid var(--border)', overflow: 'hidden' }}>
+              <button
+                onClick={() => setActivityTab('campaigns')}
+                style={{
+                  padding: '0.45rem 0.85rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  background: activityTab === 'campaigns' ? 'var(--primary)' : 'var(--card)',
+                  color: activityTab === 'campaigns' ? '#ffffff' : 'var(--muted-foreground)',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                📁 Campaign Records ({campaigns.length})
+              </button>
+              <button
+                onClick={() => setActivityTab('events')}
+                style={{
+                  padding: '0.45rem 0.85rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  background: activityTab === 'events' ? 'var(--primary)' : 'var(--card)',
+                  color: activityTab === 'events' ? '#ffffff' : 'var(--muted-foreground)',
+                  border: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                📜 Raw Events ({logs.length})
+              </button>
+            </div>
+
+            <button className="btn btn-outline" onClick={() => router.push('/campaign-dashboard')} style={{ fontSize: '0.825rem', padding: '0.45rem 0.85rem' }}>
+              📈 Full Analytics
+            </button>
+          </div>
         </div>
 
-        <div className="card" style={{ padding: 0 }}>
-          <div className="table-container">
+        {/* TAB 1: CAMPAIGN RECORDS (PRIMARY & ORGANIZED) */}
+        {activityTab === 'campaigns' && (
+          <div className="card" style={{ padding: 0 }}>
             {loading ? (
-              <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>Loading activity...</div>
-            ) : logs.length === 0 ? (
               <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>
-                No activity yet. Send a campaign or click Sync Replies to see logs here.
+                Loading campaign records...
+              </div>
+            ) : campaigns.length === 0 ? (
+              <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center' }}>
+                <span style={{ fontSize: '2.5rem', display: 'block', marginBottom: '0.75rem' }}>🎯</span>
+                <h3 style={{ fontSize: '1.15rem', marginBottom: '0.35rem' }}>No campaigns launched yet</h3>
+                <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem', maxWidth: '380px', margin: '0 auto 1.25rem' }}>
+                  Create an email campaign from the Campaigns section to start building your marketing records.
+                </p>
+                <button className="btn" onClick={() => router.push('/campaigns')}>
+                  Create Campaign
+                </button>
               </div>
             ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Action</th>
-                    <th>Status</th>
-                    <th>Date</th>
-                    <th>Result</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log) => {
-                    const isExpanded = expandedId === log.id;
-                    return (
-                      <Fragment key={log.id}>
+              <div className="table-container">
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--muted)', textAlign: 'left' }}>
+                      <th style={{ padding: '1rem' }}>Campaign Subject</th>
+                      <th style={{ padding: '1rem' }}>Launched</th>
+                      <th style={{ padding: '1rem' }}>Target Leads</th>
+                      <th style={{ padding: '1rem' }}>Responses</th>
+                      <th style={{ padding: '1rem' }}>Reply Rate</th>
+                      <th style={{ padding: '1rem', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campaigns.map((camp) => {
+                      const leadsCount = camp.leads?.length || 0;
+                      const repliesCount = camp.leads?.filter((l: any) => l.replied)?.length || 0;
+                      const rate = leadsCount > 0 ? Math.round((repliesCount / leadsCount) * 100) : 0;
+
+                      return (
                         <tr 
-                          style={{ cursor: 'pointer', borderBottom: isExpanded ? 'none' : '1px solid var(--border)' }} 
-                          onClick={() => setExpandedId(isExpanded ? null : log.id)}
+                          key={camp.id} 
+                          style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                          onClick={() => router.push(`/campaign-dashboard?campaign=${camp.id}`)}
                         >
-                          <td><strong>{getActionLabel(log)}</strong></td>
-                          <td>{getStatusBadge(log)}</td>
-                          <td>{new Date(log.timestamp).toLocaleString()}</td>
-                          <td>{getResult(log)}</td>
-                          <td>
-                            <button 
-                              onClick={(e) => handleDeleteLog(e, log.id)}
-                              style={{ 
-                                background: 'transparent', 
-                                border: 'none', 
-                                color: '#ef4444', 
-                                fontSize: '0.75rem', 
-                                cursor: 'pointer',
+                          <td style={{ padding: '1rem' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--foreground)' }}>
+                              {camp.subject}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.2rem' }}>
+                              ID: {camp.id.length > 20 ? camp.id.substring(0, 20) + '...' : camp.id}
+                            </div>
+                          </td>
+                          <td style={{ padding: '1rem', color: 'var(--muted-foreground)', fontSize: '0.825rem' }}>
+                            {camp.timestamp ? new Date(camp.timestamp).toLocaleDateString() : 'Active'}
+                          </td>
+                          <td style={{ padding: '1rem', fontWeight: 600 }}>
+                            {leadsCount} leads
+                          </td>
+                          <td style={{ padding: '1rem' }}>
+                            <span style={{ 
+                              padding: '0.2rem 0.5rem', 
+                              borderRadius: '4px', 
+                              fontSize: '0.75rem', 
+                              fontWeight: 600,
+                              background: repliesCount > 0 ? '#dcfce7' : 'var(--muted)',
+                              color: repliesCount > 0 ? '#166534' : 'var(--muted-foreground)'
+                            }}>
+                              {repliesCount} replies
+                            </span>
+                          </td>
+                          <td style={{ padding: '1rem' }}>
+                            <span style={{ 
+                              padding: '0.2rem 0.55rem', 
+                              borderRadius: '6px', 
+                              fontSize: '0.75rem', 
+                              fontWeight: 700,
+                              background: rate > 15 ? 'rgba(16, 185, 129, 0.12)' : 'rgba(99, 102, 241, 0.12)',
+                              color: rate > 15 ? '#10b981' : '#6366f1'
+                            }}>
+                              {rate}%
+                            </span>
+                          </td>
+                          <td style={{ padding: '1rem', textAlign: 'right' }}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/campaign-dashboard?campaign=${camp.id}`);
+                              }}
+                              style={{
+                                padding: '0.35rem 0.75rem',
+                                borderRadius: '6px',
+                                background: 'rgba(99, 102, 241, 0.1)',
+                                color: 'var(--primary)',
+                                border: '1px solid rgba(99, 102, 241, 0.25)',
+                                fontSize: '0.75rem',
                                 fontWeight: 600,
-                                opacity: 0.7
+                                cursor: 'pointer'
                               }}
                             >
-                              Delete
+                              📊 Analytics →
                             </button>
                           </td>
                         </tr>
-                        {isExpanded && (
-                          <tr style={{ background: 'rgba(0,0,0,0.02)' }}>
-                            <td colSpan={4} style={{ padding: '1.5rem' }}>
-                              <div style={{ display: 'grid', gridTemplateColumns: log.message && log.ai_reply ? '1fr 1fr' : '1fr', gap: '2rem' }}>
-                                {log.subject && (
-                                  <div style={{ gridColumn: '1 / -1' }}>
-                                    <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem', color: 'var(--primary)' }}>SUBJECT:</strong>
-                                    <div style={{ fontSize: '0.875rem', color: 'var(--foreground)' }}>{log.subject}</div>
-                                  </div>
-                                )}
-                                {log.message && (
-                                  <div>
-                                    <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem', color: 'var(--primary)' }}>MESSAGE CONTENT:</strong>
-                                    <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(0,0,0,0.03)', padding: '1rem', borderRadius: '4px' }}>
-                                      {log.message}
-                                    </pre>
-                                  </div>
-                                )}
-                                {log.body && (
-                                  <div>
-                                    <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem', color: 'var(--primary)' }}>EMAIL BODY:</strong>
-                                    <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(0,0,0,0.03)', padding: '1rem', borderRadius: '4px' }}>
-                                      {log.body}
-                                    </pre>
-                                  </div>
-                                )}
-                                {log.ai_reply && (
-                                  <div>
-                                    <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem', color: '#16a34a' }}>AI RESPONSE:</strong>
-                                    <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(22, 163, 74, 0.05)', padding: '1rem', borderRadius: '4px', border: '1px solid rgba(22, 163, 74, 0.1)' }}>
-                                      {log.ai_reply}
-                                    </pre>
-                                  </div>
-                                )}
-                                {!log.message && !log.body && !log.ai_reply && (
-                                  <div style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>
-                                    No additional details available for this activity.
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
-        </div>
+        )}
+
+        {/* TAB 2: RAW EVENT LOGS */}
+        {activityTab === 'events' && (
+          <div className="card" style={{ padding: 0 }}>
+            <div className="table-container">
+              {loading ? (
+                <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>Loading activity...</div>
+              ) : logs.length === 0 ? (
+                <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-foreground)' }}>
+                  No activity events recorded yet.
+                </div>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Action</th>
+                      <th>Status</th>
+                      <th>Date</th>
+                      <th>Result</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {logs.map((log) => {
+                      const isExpanded = expandedId === log.id;
+                      return (
+                        <Fragment key={log.id}>
+                          <tr 
+                            style={{ cursor: 'pointer', borderBottom: isExpanded ? 'none' : '1px solid var(--border)' }} 
+                            onClick={() => setExpandedId(isExpanded ? null : log.id)}
+                          >
+                            <td><strong>{getActionLabel(log)}</strong></td>
+                            <td>{getStatusBadge(log)}</td>
+                            <td>{new Date(log.timestamp).toLocaleString()}</td>
+                            <td>{getResult(log)}</td>
+                            <td>
+                              <button 
+                                onClick={(e) => handleDeleteLog(e, log.id)}
+                                style={{ 
+                                  background: 'transparent', 
+                                  border: 'none', 
+                                  color: '#ef4444', 
+                                  fontSize: '0.75rem', 
+                                  cursor: 'pointer',
+                                  fontWeight: 600,
+                                  opacity: 0.7
+                                }}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr style={{ background: 'rgba(0,0,0,0.02)' }}>
+                              <td colSpan={5} style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: log.message && log.ai_reply ? '1fr 1fr' : '1fr', gap: '1.5rem' }}>
+                                  {log.subject && (
+                                    <div style={{ gridColumn: '1 / -1' }}>
+                                      <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.35rem', color: 'var(--primary)' }}>SUBJECT:</strong>
+                                      <div style={{ fontSize: '0.85rem', color: 'var(--foreground)' }}>{log.subject}</div>
+                                    </div>
+                                  )}
+                                  {log.message && (
+                                    <div>
+                                      <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.35rem', color: 'var(--primary)' }}>MESSAGE CONTENT:</strong>
+                                      <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(0,0,0,0.03)', padding: '0.85rem', borderRadius: '4px' }}>
+                                        {log.message}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {log.body && (
+                                    <div>
+                                      <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.35rem', color: 'var(--primary)' }}>EMAIL BODY:</strong>
+                                      <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(0,0,0,0.03)', padding: '0.85rem', borderRadius: '4px' }}>
+                                        {log.body}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {log.ai_reply && (
+                                    <div>
+                                      <strong style={{ fontSize: '0.75rem', display: 'block', marginBottom: '0.35rem', color: '#16a34a' }}>AI RESPONSE:</strong>
+                                      <pre style={{ fontSize: '0.8rem', whiteSpace: 'pre-wrap', margin: 0, fontFamily: 'inherit', color: 'var(--foreground)', background: 'rgba(22, 163, 74, 0.05)', padding: '0.85rem', borderRadius: '4px', border: '1px solid rgba(22, 163, 74, 0.1)' }}>
+                                        {log.ai_reply}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
       </section>
-    </div>
-  );
-}
+      </div>
+    );
+  }

@@ -47,8 +47,10 @@ const Sidebar = () => {
               padding: '0.25rem 0.5rem', 
               borderRadius: '6px', 
               border: '1px solid var(--border)',
-              background: 'white',
-              lineHeight: 1
+              background: 'var(--card)',
+              color: 'var(--foreground)',
+              lineHeight: 1,
+              cursor: 'pointer'
             }}
           >
             {isOpen ? '✕' : '☰'}
