@@ -1,5 +1,6 @@
+import re
 from fastapi import APIRouter, Depends
-from app.db import email_logs_collection
+from app.db import email_logs_collection, users_collection
 from bson import ObjectId
 from app.api.auth import get_current_user
 
@@ -9,13 +10,17 @@ router = APIRouter(prefix="/responses", tags=["Responses"])
 def _serialize(doc: dict) -> dict:
     if not doc:
         return doc
-    doc["id"] = str(doc.pop("_id"))
-    if "timestamp" in doc and doc["timestamp"]:
-        if hasattr(doc["timestamp"], "isoformat"):
-            doc["timestamp"] = doc["timestamp"].isoformat()
+    doc_copy = dict(doc)
+    if "_id" in doc_copy:
+        doc_copy["id"] = str(doc_copy.pop("_id"))
+    elif "id" in doc_copy:
+        doc_copy["id"] = str(doc_copy["id"])
+    if "timestamp" in doc_copy and doc_copy["timestamp"]:
+        if hasattr(doc_copy["timestamp"], "isoformat"):
+            doc_copy["timestamp"] = doc_copy["timestamp"].isoformat()
         else:
-            doc["timestamp"] = str(doc["timestamp"])
-    return doc
+            doc_copy["timestamp"] = str(doc_copy["timestamp"])
+    return doc_copy
 
 
 def _get_log_date_str(log: dict) -> str:
@@ -30,38 +35,57 @@ def _get_log_date_str(log: dict) -> str:
 
 
 def clean_subject(subject: str) -> str:
-    """Removes 'Re:', 'Fwd:', and extra whitespace to normalize subjects for grouping."""
+    """Removes 'Re:', 'Fwd:', brackets, and extra whitespace to normalize subjects for grouping."""
     if not subject:
         return ""
-    # Normalize to lowercase and strip whitespace
     s = subject.strip().lower()
-    while s.startswith("re:") or s.startswith("fwd:"):
-        if s.startswith("re:"):
-            s = s[3:].strip()
-        elif s.startswith("fwd:"):
-            s = s[4:].strip()
+    pattern = r'^(re|fwd|fw|aw|r)\s*(\[\d+\])?\s*:\s*'
+    while re.match(pattern, s, flags=re.IGNORECASE):
+        s = re.sub(pattern, '', s, count=1, flags=re.IGNORECASE).strip()
+    s = re.sub(r'\s+', ' ', s)
     return s.strip()
 
 
 @router.get("/campaigns")
 async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
-    """Returns a grouped dashboard of campaigns and lead responses."""
+    """Returns a grouped dashboard of campaigns and lead responses across connected workspace accounts."""
     if email_logs_collection is None:
         return []
 
-    # 1. Fetch all 'sent' logs for this user to identify campaigns
-    sent_cursor = email_logs_collection.find(
-        {"user_email": user["email"], "type": "sent"}
-    ).sort("timestamp", -1)
-    sent_logs = await sent_cursor.to_list(length=1000)
+    # 1. Fetch all connected user emails in the workspace
+    all_user_emails = [user["email"]]
+    if users_collection is not None:
+        try:
+            connected_docs = await users_collection.find(
+                {"access_token": {"$exists": True}},
+                {"email": 1}
+            ).to_list(100)
+            for d in connected_docs:
+                if d.get("email"):
+                    all_user_emails.append(d["email"])
+        except Exception as e:
+            print(f"[Responses] Error fetching connected accounts: {e}")
+    
+    all_user_emails = list(set(e.lower().strip() for e in all_user_emails if e))
+    email_regex_patterns = [f"^{re.escape(e)}$" for e in all_user_emails]
 
-    # 2. Fetch all responses for this user
-    resp_cursor = email_logs_collection.find(
-        {"user_email": user["email"], "intent": {"$exists": True}}
-    ).sort("timestamp", -1)
-    all_responses = await resp_cursor.to_list(length=1000)
+    # 2. Fetch all 'sent' logs for this workspace to identify campaigns
+    sent_cursor = email_logs_collection.find({
+        "type": "sent",
+        "$or": [
+            {"user_email": {"$in": all_user_emails}},
+            {"user_email": {"$regex": "|".join(email_regex_patterns), "$options": "i"}}
+        ]
+    }).sort("timestamp", -1)
+    sent_logs = await sent_cursor.to_list(length=2000)
 
-    # 3. Group by campaign_id
+    # 3. Fetch all inbound responses / replies
+    resp_cursor = email_logs_collection.find({
+        "type": {"$ne": "sent"}
+    }).sort("timestamp", -1)
+    all_responses = await resp_cursor.to_list(length=2000)
+
+    # 4. Group by campaign_id
     campaigns = {}
     processed_leads = set() # (campaign_id, email)
     
@@ -69,10 +93,11 @@ async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
         subject = log.get("subject", "")
         # Use campaign_id or a normalized subject+date for legacy logs
         c_id = log.get("campaign_id") or f"legacy-{clean_subject(subject)}-{_get_log_date_str(log)}"
-        recipient = log.get("recipient")
+        recipient = (log.get("recipient") or "").strip()
+        recipient_norm = recipient.lower()
         
         # Deduplicate leads within a campaign (e.g. if follow-ups were sent)
-        lead_key = (c_id, recipient)
+        lead_key = (c_id, recipient_norm)
         if lead_key in processed_leads:
             continue
         processed_leads.add(lead_key)
@@ -82,23 +107,61 @@ async def get_campaign_dashboard(user: dict = Depends(get_current_user)):
             ts_iso = ts_val.isoformat() if hasattr(ts_val, "isoformat") else str(ts_val) if ts_val else ""
             campaigns[c_id] = {
                 "id": c_id,
-                "subject": subject if not log.get("campaign_id") else subject, # Keep original subject
+                "subject": subject if not log.get("campaign_id") else subject,
                 "timestamp": ts_iso,
                 "leads": []
             }
         
-        # Check if this lead replied
-        # A reply matches by email AND (campaign_id OR subject/thread)
-        response = next((r for r in all_responses if r.get("email") == recipient and 
-                         (r.get("campaign_id") == log.get("campaign_id") or r.get("thread_id") == log.get("thread_id"))), None)
-        
+        # Match inbound response to this lead
+        sent_clean_subj = clean_subject(subject)
+        sent_cid = log.get("campaign_id")
+        sent_tid = log.get("thread_id")
+        matched_response = None
+
+        # Priority 1: Exact Thread ID match
+        if sent_tid:
+            matched_response = next((r for r in all_responses if r.get("thread_id") == sent_tid), None)
+
+        # Priority 2: Exact campaign ID match + Email match
+        if not matched_response and sent_cid:
+            matched_response = next((r for r in all_responses if r.get("campaign_id") == sent_cid and (
+                (r.get("email") or "").strip().lower() == recipient_norm or
+                ((r.get("email") or "").strip().lower() in all_user_emails and recipient_norm in all_user_emails)
+            )), None)
+
+        # Priority 3: Clean subject match + Email match
+        if not matched_response and sent_clean_subj:
+            matched_response = next((r for r in all_responses if clean_subject(r.get("subject", "")) == sent_clean_subj and (
+                (r.get("email") or "").strip().lower() == recipient_norm or
+                ((r.get("email") or "").strip().lower() in all_user_emails and recipient_norm in all_user_emails)
+            )), None)
+
+        # Priority 4: If log has reply_received == True, find any reply from this recipient
+        if not matched_response and log.get("reply_received"):
+            matched_response = next((r for r in all_responses if (r.get("email") or "").strip().lower() == recipient_norm), None)
+
+        is_replied = bool(matched_response is not None or log.get("reply_received"))
+
         lead_ts = log.get("timestamp")
         lead_ts_str = lead_ts.isoformat() if hasattr(lead_ts, "isoformat") else str(lead_ts) if lead_ts else ""
 
+        # Construct serialized response representation
+        serialized_response = _serialize(matched_response) if matched_response else None
+        if is_replied and not serialized_response:
+            serialized_response = {
+                "id": str(log.get("_id", "")),
+                "email": recipient,
+                "subject": log.get("subject", ""),
+                "intent": "REPLY",
+                "message": "Inbound reply received and confirmed via Gmail sync",
+                "reply_sent": log.get("follow_up_sent", False),
+                "timestamp": lead_ts_str
+            }
+
         campaigns[c_id]["leads"].append({
             "email": recipient,
-            "replied": response is not None,
-            "response": _serialize(response) if response else None,
+            "replied": is_replied,
+            "response": serialized_response,
             "sent_at": lead_ts_str,
             "subject": log.get("subject", ""),
             "body": log.get("body", ""),
@@ -127,7 +190,7 @@ async def get_thread(thread_id: str, user: dict = Depends(get_current_user)):
     if email_logs_collection is None:
         return []
     cursor = email_logs_collection.find(
-        {"user_email": user["email"], "thread_id": thread_id}
+        {"thread_id": thread_id}
     ).sort("timestamp", 1)  # oldest to newest
     docs = await cursor.to_list(length=100)
     return [_serialize(doc) for doc in docs]
@@ -162,9 +225,8 @@ async def delete_campaign(campaign_id: str, user: dict = Depends(get_current_use
             ]
         })
     else:
-        # Standard campaign_id deletion
+        # Standard campaign_id deletion across workspace accounts
         result = await email_logs_collection.delete_many({
-            "user_email": user["email"],
             "campaign_id": campaign_id
         })
         

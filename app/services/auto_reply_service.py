@@ -5,9 +5,10 @@ from app.services.email_service import get_user_credentials, send_email
 from app.services.ai_service import ai_service
 from app.services.sheets_service import sheets_service
 from app.db import email_logs_collection, settings_collection
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import traceback
+import re
 
 class AutoReplyService:
     async def check_all_accounts_replies(self):
@@ -32,6 +33,18 @@ class AutoReplyService:
         except Exception as e:
             print(f"[AutoReply] Error in check_all_accounts_replies: {e}")
             return {"status": "error", "message": str(e)}
+
+    @staticmethod
+    def _clean_subject(subject: str) -> str:
+        """Normalizes subject by stripping 'Re:', 'Fwd:', extra spaces for bulletproof grouping."""
+        if not subject:
+            return ""
+        s = subject.strip().lower()
+        pattern = r'^(re|fwd|fw|aw|r)\s*(\[\d+\])?\s*:\s*'
+        while re.match(pattern, s, flags=re.IGNORECASE):
+            s = re.sub(pattern, '', s, count=1, flags=re.IGNORECASE).strip()
+        s = re.sub(r'\s+', ' ', s)
+        return s.strip()
 
     def _get_recursive_body(self, payload) -> str:
         """Helper to recursively find text/plain body in nested email parts."""
@@ -177,11 +190,13 @@ class AutoReplyService:
                 if data:
                     body = base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
 
-            # 1. Look for original campaign instructions
+            # 1. Look for original campaign instructions and sent message
             campaign_instruction = None
             orig_log = None
+            clean_subj = self._clean_subject(subject)
+
             if email_logs_collection is not None:
-                # Try thread_id match first (most accurate)
+                # Priority 1: Exact thread_id match for this user
                 if thread_id:
                     orig_log = await email_logs_collection.find_one({
                         "user_email": user_email,
@@ -189,12 +204,45 @@ class AutoReplyService:
                         "thread_id": thread_id
                     })
                 
-                # Fallback to recipient email match
+                # Priority 2: Exact thread_id match across all sent logs (multi-account rotation)
+                if not orig_log and thread_id:
+                    orig_log = await email_logs_collection.find_one({
+                        "type": "sent",
+                        "thread_id": thread_id
+                    })
+
+                # Priority 3: Clean subject + Recipient match
+                if not orig_log and clean_subj:
+                    sent_candidates = await email_logs_collection.find({
+                        "type": "sent",
+                        "$or": [
+                            {"recipient": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"}},
+                            {"user_email": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"}}
+                        ]
+                    }).sort("timestamp", -1).to_list(length=100)
+
+                    for cand in sent_candidates:
+                        if self._clean_subject(cand.get("subject", "")) == clean_subj:
+                            orig_log = cand
+                            break
+                
+                # Priority 4: Fallback to recipient email match for this user (recent within 60 days)
                 if not orig_log:
+                    cutoff_date = datetime.utcnow() - timedelta(days=60)
                     orig_log = await email_logs_collection.find_one({
                         "user_email": user_email,
                         "type": "sent",
-                        "recipient": {"$regex": f"^{sender_email}$", "$options": "i"}
+                        "recipient": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"},
+                        "timestamp": {"$gte": cutoff_date}
+                    }, sort=[("timestamp", -1)])
+
+                # Priority 5: Fallback across any sent log to this recipient (within 60 days)
+                if not orig_log:
+                    cutoff_date = datetime.utcnow() - timedelta(days=60)
+                    orig_log = await email_logs_collection.find_one({
+                        "type": "sent",
+                        "recipient": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"},
+                        "timestamp": {"$gte": cutoff_date}
                     }, sort=[("timestamp", -1)])
                 
             if not orig_log:
@@ -253,17 +301,32 @@ class AutoReplyService:
                 }
                 await email_logs_collection.insert_one(record)
                 
-                # Detect reply and mark original 'sent' message to prevent follow-ups
-                query = {"user_email": user_email, "type": "sent"}
-                if msg.get('threadId'):
-                    query["$or"] = [{"thread_id": msg.get('threadId')}, {"recipient": {"$regex": f"^{sender_email}$", "$options": "i"}}]
+                # Detect reply and mark original 'sent' message to prevent follow-ups & show in dashboard
+                if orig_log and "_id" in orig_log:
+                    await email_logs_collection.update_one(
+                        {"_id": orig_log["_id"]},
+                        {"$set": {"reply_received": True}}
+                    )
+
+                if orig_log and orig_log.get("campaign_id"):
+                    await email_logs_collection.update_many(
+                        {
+                            "campaign_id": orig_log["campaign_id"],
+                            "recipient": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"}
+                        },
+                        {"$set": {"reply_received": True}}
+                    )
                 else:
-                    query["recipient"] = {"$regex": f"^{sender_email}$", "$options": "i"}
-                
-                await email_logs_collection.update_many(
-                    query,
-                    {"$set": {"reply_received": True}}
-                )
+                    query = {"type": "sent"}
+                    if msg.get('threadId'):
+                        query["$or"] = [{"thread_id": msg.get('threadId')}, {"recipient": {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"}}]
+                    else:
+                        query["recipient"] = {"$regex": f"^{re.escape(sender_email)}$", "$options": "i"}
+                    
+                    await email_logs_collection.update_many(
+                        query,
+                        {"$set": {"reply_received": True}}
+                    )
             
             # Log to Google Sheets
             try:

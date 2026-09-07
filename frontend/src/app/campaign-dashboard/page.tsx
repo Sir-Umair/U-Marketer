@@ -601,7 +601,7 @@ function CampaignDashboardContent() {
                                 {lead.response.intent ? lead.response.intent.toUpperCase() : 'REPLY'}
                               </span>
                               <span style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)' }}>
-                                {lead.response.reply_sent ? '⚡ Auto-Replied' : 'Logged'}
+                                {lead.response.reply_sent ? '⚡ Auto-Replied' : 'Inbound'}
                               </span>
                             </div>
                             <div style={{ 
@@ -612,8 +612,24 @@ function CampaignDashboardContent() {
                               overflow: 'hidden', 
                               textOverflow: 'ellipsis' 
                             }}>
-                              &ldquo;{lead.response.message || lead.response.snippet || 'Client responded'}&rdquo;
+                              &ldquo;{(lead.response.message || lead.response.snippet || 'Client responded').replace(/\r?\n/g, ' ').trim()}&rdquo;
                             </div>
+                          </div>
+                        ) : lead.replied ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <span style={{ 
+                              background: '#dcfce7', 
+                              color: '#166534', 
+                              padding: '0.15rem 0.45rem', 
+                              borderRadius: '4px', 
+                              fontSize: '0.7rem', 
+                              fontWeight: 700 
+                            }}>
+                              REPLY
+                            </span>
+                            <span style={{ fontSize: '0.8rem', color: '#166534', fontWeight: 600 }}>
+                              Inbound response confirmed
+                            </span>
                           </div>
                         ) : (
                           <span style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>
@@ -839,11 +855,25 @@ function CampaignDashboardContent() {
                               <td style={{ padding: '0.75rem 1rem', color: 'var(--muted-foreground)' }}>
                                 {lead.response ? (
                                   <div>
-                                    <span style={{ fontWeight: 600, color: '#1e40af', marginRight: '0.4rem' }}>
-                                      [{lead.response.intent || 'REPLY'}]:
+                                    <span style={{ 
+                                      fontWeight: 700, 
+                                      color: '#1e40af', 
+                                      background: '#dbeafe',
+                                      padding: '0.1rem 0.35rem',
+                                      borderRadius: '4px',
+                                      fontSize: '0.7rem',
+                                      marginRight: '0.4rem' 
+                                    }}>
+                                      {lead.response.intent ? lead.response.intent.toUpperCase() : 'REPLY'}
                                     </span>
-                                    <span>{lead.response.message || 'Client responded'}</span>
+                                    <span style={{ color: 'var(--foreground)' }}>
+                                      &ldquo;{(lead.response.message || 'Client responded').replace(/\r?\n/g, ' ').trim()}&rdquo;
+                                    </span>
                                   </div>
+                                ) : lead.replied ? (
+                                  <span style={{ color: '#166534', fontWeight: 600 }}>
+                                    ✓ Inbound reply confirmed
+                                  </span>
                                 ) : (
                                   '—'
                                 )}

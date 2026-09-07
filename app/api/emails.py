@@ -232,11 +232,33 @@ async def get_suggestions(request: dict):
 
 @router.post("/process-replies")
 async def process_replies(user: dict = Depends(get_current_user)):
-    """Manually triggers the check for unread emails and auto-replies."""
+    """Manually triggers the check for unread emails and auto-replies across all connected inboxes."""
     # Deduct 3 credits for Auto-Reply Processing
     await credit_service.deduct_credits(user["email"], 3, "Inbox Scan & AI Auto-Replies")
-    result = await auto_reply_service.check_and_reply_to_emails(user_email=user["email"])
+    result = await auto_reply_service.check_all_accounts_replies()
+    
+    total_processed = 0
+    total_replies_sent = 0
+    total_skipped = 0
+    if result.get("results"):
+        for r in result["results"]:
+            if isinstance(r, dict):
+                total_processed += r.get("processed", 0)
+                total_replies_sent += r.get("replies_sent", 0)
+                total_skipped += r.get("skipped", 0)
+    elif result.get("processed") is not None:
+        total_processed = result.get("processed", 0)
+        total_replies_sent = result.get("replies_sent", 0)
+        total_skipped = result.get("skipped", 0)
+
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("message"))
-    return result
+
+    return {
+        "status": "success",
+        "processed": total_processed,
+        "replies_sent": total_replies_sent,
+        "skipped": total_skipped,
+        "accounts_checked": result.get("accounts", 1)
+    }
 
