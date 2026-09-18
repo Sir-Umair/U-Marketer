@@ -4,13 +4,16 @@ from email.message import EmailMessage
 from app.services.email_service import get_user_credentials, send_email
 from app.services.ai_service import ai_service
 from app.services.sheets_service import sheets_service
-from app.db import email_logs_collection, settings_collection
+from app.db import email_logs_collection, settings_collection, scanned_messages_collection
 from datetime import datetime, timedelta
 import asyncio
 import traceback
 import re
 
 class AutoReplyService:
+    def __init__(self):
+        self._account_cooldowns: dict = {}
+
     async def check_all_accounts_replies(self):
         """Iterates over all active Gmail accounts in users_collection and processes inboxes concurrently."""
         from app.db import users_collection
@@ -26,7 +29,7 @@ class AutoReplyService:
                 print("[AutoReply] No active connected user accounts found.")
                 return {"status": "success", "accounts": 0}
 
-            print(f"[AutoReply] Running concurrent inbox check for {len(active_users)} connected account(s)...")
+            print(f"[AutoReply] Running inbox check for {len(active_users)} connected account(s)...")
             tasks = [self.check_and_reply_to_emails(u["email"]) for u in active_users if "email" in u]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             return {"status": "success", "accounts": len(tasks), "results": results}
@@ -48,13 +51,11 @@ class AutoReplyService:
 
     def _get_recursive_body(self, payload) -> str:
         """Helper to recursively find text/plain body in nested email parts."""
-        # 1. Check if this part itself is the text body
         if payload.get('mimeType') == 'text/plain':
             data = payload.get('body', {}).get('data', '')
             if data:
                 return base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
         
-        # 2. If it has parts, search them recursively
         if 'parts' in payload:
             for part in payload['parts']:
                 body = self._get_recursive_body(part)
@@ -63,7 +64,17 @@ class AutoReplyService:
         return ""
 
     async def check_and_reply_to_emails(self, user_email: str):
-        """Checks for unread emails and processes them using Gmail API in parallel."""
+        """Checks for unread emails and processes them using Gmail API safely without tripping rate limits."""
+        # 1. Check if account is in rate-limit cooldown
+        if user_email in self._account_cooldowns:
+            cooldown_expiry = self._account_cooldowns[user_email]
+            if datetime.utcnow() < cooldown_expiry:
+                remaining_mins = max(1, int((cooldown_expiry - datetime.utcnow()).total_seconds() / 60))
+                print(f"[AutoReply] Skipping {user_email} (cooling down from Google API rate limits for ~{remaining_mins}m)")
+                return {"status": "rate_limited", "message": f"In cooldown for ~{remaining_mins}m"}
+            else:
+                del self._account_cooldowns[user_email]
+
         try:
             # Check if auto-reply is enabled for this user (case-insensitive)
             user_settings = await settings_collection.find_one({
@@ -78,41 +89,49 @@ class AutoReplyService:
             creds = await get_user_credentials(user_email)
             service = build('gmail', 'v1', credentials=creds)
 
-            # Search for messages in the inbox
-            # We include recently read messages in case the user clicked them in Gmail, 
-            # ensuring they are still processed by our sync.
-            query = "label:inbox -from:me newer_than:3d"
-            results = await asyncio.to_thread(service.users().messages().list(userId='me', q=query).execute)
+            # Search inbox with a modest query to avoid quota exhaustion
+            query = "label:inbox -from:me newer_than:2d"
+            results = await asyncio.to_thread(
+                service.users().messages().list(userId='me', q=query, maxResults=30).execute
+            )
             messages = results.get('messages', [])
             
             if not messages:
-                print(f"[AutoReply] No new messages found in inbox for {user_email}")
+                print(f"[AutoReply] No recent messages found in inbox for {user_email}")
                 return {"status": "success", "processed": 0, "replies_sent": 0}
 
-            print(f"[AutoReply] Found {len(messages)} messages to check for {user_email}")
-
-            # Get already processed IDs for this user
+            # Retrieve already processed message IDs from both scanned collection and email logs
             already_processed = set()
+            if scanned_messages_collection is not None:
+                async for s_doc in scanned_messages_collection.find({"user_email": user_email}, {"message_id": 1}).limit(2000):
+                    mid = s_doc.get("message_id")
+                    if mid:
+                        already_processed.add(mid)
+
             if email_logs_collection is not None:
                 cursor = email_logs_collection.find(
                     {"user_email": user_email, "message_id": {"$exists": True}},
                     {"message_id": 1}
-                )
+                ).limit(2000)
                 async for doc in cursor:
-                    already_processed.add(doc.get("message_id"))
+                    mid = doc.get("message_id")
+                    if mid:
+                        already_processed.add(mid)
 
-            # Filter out already processed messages
             new_messages = [m for m in messages if m['id'] not in already_processed]
             
             if not new_messages:
-                print(f"[AutoReply] All {len(messages)} inbox messages were already processed for {user_email}")
+                print(f"[AutoReply] All {len(messages)} recent messages were already checked for {user_email}")
                 return {"status": "success", "processed": 0, "replies_sent": 0}
 
-            # Process new messages in parallel with a concurrency limit
-            semaphore = asyncio.Semaphore(20)
+            print(f"[AutoReply] Found {len(new_messages)} new message(s) to inspect for {user_email}")
+
+            # Process with low concurrency to strictly respect Google API quotas
+            semaphore = asyncio.Semaphore(2)
             
             async def bounded_process(msg_id):
                 async with semaphore:
+                    await asyncio.sleep(0.15)
                     return await self._process_single_message(creds, user_email, msg_id, auto_reply_enabled)
 
             tasks = [bounded_process(msg_item['id']) for msg_item in new_messages]
@@ -131,7 +150,11 @@ class AutoReplyService:
                     elif res.get("status") == "skipped":
                         skipped_count += 1
                 elif isinstance(res, Exception):
-                    print(f"[AutoReply] Task failed with exception: {res}")
+                    err_str = str(res)
+                    if "429" in err_str or "rateLimitExceeded" in err_str:
+                        self._account_cooldowns[user_email] = datetime.utcnow() + timedelta(minutes=12)
+                        print(f"[AutoReply] Google API rate limit detected for {user_email}. Entering 12m cooldown.")
+                        break
 
             return {
                 "status": "success",
@@ -143,16 +166,15 @@ class AutoReplyService:
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "rateLimitExceeded" in err_str or "User-rate limit exceeded" in err_str:
-                print(f"[AutoReply] Gmail API Rate Limit exceeded for {user_email}. Pausing until next cycle.")
-                return {"status": "rate_limited", "message": "Rate limit exceeded. Will retry automatically."}
+                self._account_cooldowns[user_email] = datetime.utcnow() + timedelta(minutes=12)
+                print(f"[AutoReply] Gmail API Rate Limit exceeded for {user_email}. Pausing all checks for 12 minutes.")
+                return {"status": "rate_limited", "message": "Rate limit exceeded. Cooling down for 12m."}
             elif "invalid_grant" in err_str or "Authentication expired" in err_str or "RefreshError" in type(e).__name__:
                 from app.services.email_service import mark_user_auth_expired
                 await mark_user_auth_expired(user_email, "Authentication expired. Please reconnect your Gmail account.")
                 print(f"[AutoReply] Authentication expired or invalid for {user_email}. User needs to reconnect Gmail account.")
             else:
                 print(f"[AutoReply] Error in auto-reply service for {user_email}: {e}")
-                import traceback
-                traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
     async def _process_single_message(self, creds, user_email: str, msg_id: str, auto_reply_enabled: bool = True):
@@ -251,6 +273,15 @@ class AutoReplyService:
                 
             if not orig_log:
                 print(f"[AutoReply] SKIPPED: No previous sent email found for {sender_email}. Not a lead response.")
+                if scanned_messages_collection is not None:
+                    try:
+                        await scanned_messages_collection.update_one(
+                            {"user_email": user_email, "message_id": msg_id},
+                            {"$set": {"user_email": user_email, "message_id": msg_id, "timestamp": datetime.utcnow()}},
+                            upsert=True
+                        )
+                    except Exception:
+                        pass
                 return {"status": "skipped", "reason": "not-a-lead"}
 
             campaign_instruction = orig_log.get("auto_reply_prompt")

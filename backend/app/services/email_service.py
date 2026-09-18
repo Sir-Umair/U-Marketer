@@ -253,6 +253,8 @@ async def send_bulk_emails(
     success_count = 0
     failed_emails = []
     error_messages = []
+    actual_senders_used = set()
+    temporary_inactive_senders = set()
 
     for idx, recipient_email in enumerate(list_of_emails):
         # 1. Email #1 sends initially. Subsequent emails wait the desired custom delay.
@@ -260,7 +262,6 @@ async def send_bulk_emails(
             print(f"[EmailService] [DELAY] Waiting desired custom delay of {desired_delay}s before dispatching email #{idx+1}/{total_emails} to {recipient_email}...")
             await asyncio.sleep(desired_delay)
 
-        assigned_sender = senders[idx % len(senders)]
         lead_info = lead_map.get(recipient_email.lower().strip())
 
         # Personalize subject, body, and follow-up body for this lead
@@ -268,28 +269,56 @@ async def send_bulk_emails(
         personalized_body = format_personalized_text(body, lead_info, recipient_email)
         personalized_followup = format_personalized_text(follow_up_body, lead_info, recipient_email) if follow_up_body else None
 
-        result = await send_email(
-            to_email=recipient_email,
-            subject=personalized_subject,
-            body=personalized_body,
-            user_email=assigned_sender,
-            attachment_data=attachment_data,
-            attachment_name=attachment_name,
-            follow_up_delay=follow_up_delay,
-            follow_up_body=personalized_followup,
-            auto_reply_prompt=auto_reply_prompt,
-            campaign_id=campaign_id
-        )
+        # Determine rotation candidate list with failover
+        primary_assigned = senders[idx % len(senders)]
+        active_candidates = [s for s in senders if s not in temporary_inactive_senders]
+        if not active_candidates:
+            # If all are temporarily flagged, reset pool to try again
+            temporary_inactive_senders.clear()
+            active_candidates = senders
 
-        if result.get("success"):
+        if primary_assigned in active_candidates:
+            candidate_list = [primary_assigned] + [s for s in active_candidates if s != primary_assigned]
+        else:
+            candidate_list = active_candidates
+
+        send_success = False
+        last_err = None
+        sender_used = None
+
+        for candidate_sender in candidate_list:
+            result = await send_email(
+                to_email=recipient_email,
+                subject=personalized_subject,
+                body=personalized_body,
+                user_email=candidate_sender,
+                attachment_data=attachment_data,
+                attachment_name=attachment_name,
+                follow_up_delay=follow_up_delay,
+                follow_up_body=personalized_followup,
+                auto_reply_prompt=auto_reply_prompt,
+                campaign_id=campaign_id
+            )
+
+            if result.get("success"):
+                send_success = True
+                sender_used = candidate_sender
+                actual_senders_used.add(candidate_sender)
+                break
+            else:
+                last_err = result.get("error", "Unknown error")
+                print(f"[EmailService] [FAILOVER] Account {candidate_sender} failed for {recipient_email}: {last_err}. Trying next available account...")
+                if "429" in str(last_err) or "rateLimitExceeded" in str(last_err) or "expired" in str(last_err).lower():
+                    temporary_inactive_senders.add(candidate_sender)
+
+        if send_success:
             success_count += 1
-            print(f"[EmailService] [SUCCESS] Sent to {recipient_email} via {assigned_sender} ({idx+1}/{total_emails})")
+            print(f"[EmailService] [SUCCESS] Sent to {recipient_email} via {sender_used} ({idx+1}/{total_emails})")
         else:
             failed_emails.append(recipient_email)
-            err = result.get("error")
-            if err and err not in error_messages:
-                error_messages.append(err)
-            print(f"[EmailService] [FAIL] Failed sending to {recipient_email}: {err}")
+            if last_err and last_err not in error_messages:
+                error_messages.append(last_err)
+            print(f"[EmailService] [FAIL] All available sender accounts failed sending to {recipient_email}: {last_err}")
 
     last_error = "; ".join(error_messages) if error_messages else None
 
@@ -299,6 +328,6 @@ async def send_bulk_emails(
         "successful": success_count,
         "failed": len(failed_emails),
         "failed_emails": failed_emails,
-        "senders_used": senders,
+        "senders_used": list(actual_senders_used) if actual_senders_used else senders,
         "error": last_error
     }
