@@ -180,7 +180,11 @@ class AutoReplyService:
             if sender_email.lower() == user_email.lower():
                 return {"status": "skipped", "reason": "self-email"}
 
-            print(f"[AutoReply] Processing email from: {sender_email} (Subject: {subject})")
+            try:
+                print(f"[AutoReply] Processing email from: {sender_email} (Subject: {subject})")
+            except Exception:
+                safe_subj = str(subject).encode('ascii', 'replace').decode('ascii')
+                print(f"[AutoReply] Processing email from: {sender_email} (Subject: {safe_subj})")
 
             # Get body recursively
             body = self._get_recursive_body(payload)

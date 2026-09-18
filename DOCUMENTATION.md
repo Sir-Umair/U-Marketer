@@ -63,28 +63,19 @@ It enables businesses and marketers to construct high-conversion cold email camp
 
 ```
 Email-marketer/
-├── app/                        # FastAPI Backend Application
-│   ├── api/                    # API Route Handlers
-│   │   ├── auth.py             # Google OAuth2 login, callback, me & account management
-│   │   ├── emails.py           # Bulk send, AI generation, follow-up & prompt endpoints
-│   │   ├── leads.py            # Lead creation, CSV/Excel & Google Sheet URL import
-│   │   ├── logs.py             # System activity, audit logs & analytics stats
-│   │   ├── responses.py        # Prospect response tracking, campaign grouping & thread viewer
-│   │   └── settings.py         # Custom auto-reply rules & prompt configuration
-│   ├── models/                 # Pydantic Schemas & Data Models
-│   │   ├── lead.py             # Lead creation and response models
-│   │   └── user.py             # User profile schemas
-│   ├── services/               # Core Business Logic Services
-│   │   ├── ai_service.py       # Claude AI generation & LangGraph auto-reply graph
-│   │   ├── auto_reply_service.py # Gmail inbox scanner & AI response dispatcher
-│   │   ├── email_service.py    # Multi-account Gmail API sender with PDF & tag replacement
-│   │   ├── follow_up_service.py # Scheduled background follow-up worker
-│   │   ├── security_service.py  # AES/Fernet encryption for tokens
-│   │   └── sheets_service.py   # Google Sheets logging & sheet URL reader
-│   ├── config.py               # Pydantic Settings & Environment loader
-│   ├── db.py                   # MongoDB async Motor client & collection instances
-│   └── main.py                 # FastAPI application root & background monitoring task
-├── frontend/                   # Next.js 15 Frontend Application
+├── backend/                    # Dedicated FastAPI Backend Directory
+│   ├── app/                    # FastAPI Core Application Package
+│   │   ├── api/                # API Route Handlers (auth, emails, leads, logs, responses, settings, developer)
+│   │   ├── models/             # Pydantic Schemas & Data Models
+│   │   ├── services/           # Business Logic (AI, Auto-reply, Email, Follow-up, Sheets, Security)
+│   │   ├── config.py           # Environment and Pydantic Settings Loader
+│   │   ├── db.py               # MongoDB Motor Async Database Manager
+│   │   └── main.py             # FastAPI App definition, CORS, and background worker loop
+│   ├── run.py                  # Direct backend launcher (python run.py)
+│   ├── requirements.txt        # Python backend dependencies
+│   ├── credentials.json        # Google Cloud Service Account credentials (optional)
+│   └── .env                    # Backend environment variables
+├── frontend/                   # Dedicated Next.js 16/15 Frontend Application
 │   ├── src/
 │   │   ├── app/
 │   │   │   ├── auth/callback/  # OAuth redirect listener page
@@ -100,9 +91,8 @@ Email-marketer/
 │   │       └── api.ts          # Frontend API client library
 │   ├── package.json
 │   └── tsconfig.json
-├── .env                        # Environment variables configuration
-├── credentials.json            # Google Cloud Service Account credentials (optional)
-└── requirements.txt            # Python dependencies
+├── package.json                # Monorepo root scripts (dev:backend, dev:frontend, etc.)
+└── DOCUMENTATION.md            # Comprehensive project documentation
 ```
 
 ---
@@ -254,19 +244,22 @@ GOOGLE_CREDENTIALS_FILE=credentials.json
 
 #### **1. Start the Backend API (FastAPI)**
 
-Open a terminal in the project root:
+Open a terminal and navigate to the backend directory:
 
 ```powershell
-# Navigate to project root
-cd "f:\AGENTIC Ai\Email-marketer"
+# Navigate to backend directory
+cd "f:\AGENTIC Ai\Email-marketer\backend"
 
-# Activate virtual environment
-.\venv\Scripts\activate
+# Activate virtual environment (from project root)
+..\venv\Scripts\activate
 
 # Install requirements if needed
 pip install -r requirements.txt
 
-# Start FastAPI server
+# Start FastAPI server (Option A: via run.py)
+python run.py
+
+# OR Option B: via uvicorn directly
 uvicorn app.main:app --reload --port 8000
 ```
 > 🌐 API: `http://localhost:8000` | Swagger Docs: `http://localhost:8000/docs`
