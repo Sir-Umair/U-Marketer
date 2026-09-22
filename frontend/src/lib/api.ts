@@ -203,7 +203,9 @@ export const api = {
     emails: string[], 
     subject: string, 
     body: string, 
+    campaign_name?: string,
     sender_emails?: string[],
+    dispatch_mode?: string,
     attachment?: File | null,
     follow_up_delay: number,
     follow_up_body?: string,
@@ -219,6 +221,8 @@ export const api = {
     formData.append('subject', data.subject);
     formData.append('body', data.body);
     formData.append('follow_up_delay', data.follow_up_delay.toString());
+    if (data.campaign_name) formData.append('campaign_name', data.campaign_name);
+    if (data.dispatch_mode) formData.append('dispatch_mode', data.dispatch_mode);
     if (data.sender_emails && data.sender_emails.length > 0) {
       formData.append('sender_emails_json', JSON.stringify(data.sender_emails));
     }
@@ -278,6 +282,18 @@ export const api = {
       body: JSON.stringify({ subject, body }),
     });
     if (!response.ok) return { suggestions: [] };
+    return response.json();
+  },
+
+  async generateCampaignName(data: { prompt?: string, subject?: string, body?: string }) {
+    const response = await safeFetch('/emails/generate-campaign-name', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      return { suggested_name: 'Outreach Campaign', alternatives: [] };
+    }
     return response.json();
   },
 
@@ -424,6 +440,19 @@ export const api = {
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to delete campaign');
+    }
+    return response.json();
+  },
+
+  async renameCampaign(campaignId: string, name: string) {
+    const response = await safeFetch(`/responses/campaign/${campaignId}/rename`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to rename campaign');
     }
     return response.json();
   },

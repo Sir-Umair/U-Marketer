@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta
 from app.db import email_logs_collection, settings_collection
-from app.services.email_service import send_email
+from app.services.email_service import send_email, is_account_healthy
 from app.services.ai_service import ai_service
 from bson import ObjectId
+import asyncio
 
 class FollowUpService:
     async def process_pending_follow_ups(self):
@@ -24,21 +25,25 @@ class FollowUpService:
             "follow_up_at": {"$lte": now}
         }).limit(50)
 
-        import asyncio
         semaphore = asyncio.Semaphore(15)
 
         async def process_log(log):
             async with semaphore:
                 user_email = log.get("user_email")
                 
-                # Check if automation is paused or auth is expired for this user
+                # Check if automation is paused or auth is expired/rate-limited for this user
                 if user_email:
-                    from app.db import users_collection
-                    if users_collection is not None:
-                        user_doc = await users_collection.find_one({"email": user_email})
-                        if user_doc and user_doc.get("auth_status") == "expired":
-                            print(f"[FollowUp] SKIPPED: Authentication expired for {user_email}")
-                            return None
+                    is_healthy, status_str, mins_left = await is_account_healthy(user_email)
+                    if not is_healthy:
+                        if status_str == "rate_limited":
+                            print(f"[FollowUp] SKIPPED: Account {user_email} in rate-limit cooldown (~{mins_left}m remaining). Backing off follow-up.")
+                            await email_logs_collection.update_one(
+                                {"_id": log["_id"]},
+                                {"$set": {"follow_up_at": datetime.utcnow() + timedelta(minutes=max(15, mins_left + 2))}}
+                            )
+                        else:
+                            print(f"[FollowUp] SKIPPED: Account {user_email} is {status_str}")
+                        return None
 
                     user_settings = await settings_collection.find_one({"user_email": user_email})
                     if user_settings and not user_settings.get("auto_reply_enabled", True):
@@ -72,7 +77,37 @@ class FollowUpService:
                     )
                     return {"id": str(log["_id"]), "recipient": log["recipient"], "status": "sent"}
                 else:
-                    return {"id": str(log["_id"]), "recipient": log["recipient"], "status": "failed", "error": send_result.get("error")}
+                    attempts = log.get("follow_up_attempts", 0) + 1
+                    err = str(send_result.get("error", "Unknown error"))
+                    if attempts >= 3 or "invalid_grant" in err or "NoSuchUser" in err or "550" in err:
+                        # Max attempts reached or permanent delivery failure: abandon
+                        await email_logs_collection.update_one(
+                            {"_id": log["_id"]},
+                            {
+                                "$set": {
+                                    "follow_up_sent": True,
+                                    "follow_up_status": "failed",
+                                    "follow_up_attempts": attempts,
+                                    "follow_up_error": err
+                                }
+                            }
+                        )
+                        print(f"[FollowUp] Abandoning follow-up for {log['recipient']} after {attempts} attempts: {err}")
+                    else:
+                        # Temporary failure: back off by 30 mins
+                        next_attempt = datetime.utcnow() + timedelta(minutes=30)
+                        await email_logs_collection.update_one(
+                            {"_id": log["_id"]},
+                            {
+                                "$set": {
+                                    "follow_up_attempts": attempts,
+                                    "follow_up_at": next_attempt,
+                                    "last_error": err
+                                }
+                            }
+                        )
+                        print(f"[FollowUp] Backing off follow-up for {log['recipient']} (attempt {attempts}) until {next_attempt.strftime('%H:%M:%S UTC')}")
+                    return {"id": str(log["_id"]), "recipient": log["recipient"], "status": "failed", "error": err}
 
         tasks = []
         async for log in pending_campaigns:

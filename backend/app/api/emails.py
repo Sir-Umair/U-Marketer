@@ -57,7 +57,19 @@ async def generate_followup_from_prompt(request: GenerateFollowUpPromptRequest, 
     content = await ai_service.generate_email_content(context)
     if content.startswith("Failed to generate") or content.startswith("Error"):
         raise HTTPException(status_code=500, detail=content)
-    return {"generated_content": content}
+class GenerateCampaignNameRequest(BaseModel):
+    prompt: Optional[str] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+@router.post("/generate-campaign-name")
+async def generate_campaign_name(request: GenerateCampaignNameRequest, user: dict = Depends(get_current_user)):
+    result = await ai_service.generate_campaign_name(
+        prompt=request.prompt,
+        subject=request.subject,
+        body=request.body
+    )
+    return result
 
 @router.post("/send-bulk")
 async def send_bulk(
@@ -66,6 +78,8 @@ async def send_bulk(
     subject: str = Form(...),
     body: str = Form(...),
     sender_emails_json: Optional[str] = Form(None),
+    dispatch_mode: Optional[str] = Form("all_accounts"),
+    campaign_name: Optional[str] = Form(None),
     follow_up_delay: int = Form(0),
     follow_up_body: Optional[str] = Form(None),
     auto_reply_prompt: Optional[str] = Form(None),
@@ -98,18 +112,39 @@ async def send_bulk(
     if attachment and not attachment_name.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF attachments are permitted.")
 
+    effective_dispatch_mode = (dispatch_mode or "all_accounts").strip().lower()
+    active_senders_count = len(sender_emails) if sender_emails and len(sender_emails) > 0 else 1
+
+    # Total dispatches calculation
+    if effective_dispatch_mode == "all_accounts" and active_senders_count > 1:
+        total_dispatches = len(emails) * active_senders_count
+    else:
+        total_dispatches = len(emails)
+
     # Determine desired custom delay
     effective_delay = float(delay_seconds) if delay_seconds > 0 else (float(min_send_delay) if min_send_delay is not None else 0.0)
     if test_mode:
         effective_delay = 1.0
 
-    # Deduct 1 credit per recipient email
-    cost = len(emails) * 1
-    await credit_service.deduct_credits(user["email"], cost, f"Bulk Campaign Dispatch ({len(emails)} emails)")
+    # Deduct 1 credit per email dispatched
+    cost = total_dispatches * 1
+    await credit_service.deduct_credits(
+        user["email"],
+        cost,
+        f"Bulk Campaign Dispatch ({total_dispatches} emails | {len(emails)} leads across {active_senders_count} senders)"
+    )
 
     campaign_id = str(uuid.uuid4())
+    from app.api.responses import clean_campaign_title
+    if campaign_name and campaign_name.strip():
+        effective_name = clean_campaign_title(campaign_name)
+    elif subject and subject.strip():
+        effective_name = clean_campaign_title(subject)
+    else:
+        effective_name = "Cold Outreach Campaign"
+
     # Email #1 sends initially (0s delay). Subsequent emails take effective_delay.
-    estimated_duration_seconds = max(0, len(emails) - 1) * effective_delay
+    estimated_duration_seconds = max(0, total_dispatches - 1) * effective_delay
 
     # If pacing will take longer than 15s and it's not a short test, dispatch in background
     if estimated_duration_seconds > 15.0 and not test_mode:
@@ -120,6 +155,7 @@ async def send_bulk(
             body=body,
             user_email=user["email"],
             sender_emails=sender_emails,
+            dispatch_mode=effective_dispatch_mode,
             attachment_data=attachment_data,
             attachment_name=attachment_name,
             follow_up_delay=follow_up_delay,
@@ -129,19 +165,23 @@ async def send_bulk(
             min_send_delay=effective_delay,
             max_send_delay=effective_delay,
             enable_human_pauses=False,
-            campaign_id=campaign_id
+            campaign_id=campaign_id,
+            campaign_name=effective_name
         )
 
         return {
             "campaign_id": campaign_id,
+            "campaign_name": effective_name,
             "status": "queued",
             "is_background": True,
-            "total": len(emails),
-            "successful": len(emails),
+            "total": total_dispatches,
+            "successful": total_dispatches,
             "failed": 0,
+            "dispatch_mode": effective_dispatch_mode,
+            "senders_requested": sender_emails or [user["email"]],
             "senders_used": sender_emails or [user["email"]],
             "estimated_minutes": round(estimated_duration_seconds / 60, 1),
-            "message": f"Campaign launched! Email #1 was sent initially. Remaining emails are sending with your custom delay of {effective_delay}s in between. Progress is tracking in real time."
+            "message": f"Campaign launched! Email #1 sends immediately. Remaining {total_dispatches - 1} email(s) are sending with {effective_delay}s delay across your {active_senders_count} selected accounts ({effective_dispatch_mode} mode)."
         }
     else:
         result = await email_service.send_bulk_emails(
@@ -150,6 +190,7 @@ async def send_bulk(
             body=body,
             user_email=user["email"],
             sender_emails=sender_emails,
+            dispatch_mode=effective_dispatch_mode,
             attachment_data=attachment_data,
             attachment_name=attachment_name,
             follow_up_delay=follow_up_delay,
@@ -159,12 +200,13 @@ async def send_bulk(
             min_send_delay=effective_delay,
             max_send_delay=effective_delay,
             enable_human_pauses=False,
-            campaign_id=campaign_id
+            campaign_id=campaign_id,
+            campaign_name=effective_name
         )
 
         if result["successful"] == 0 and len(emails) > 0:
             detail = result.get("error") or "All emails failed to send."
-            raise HTTPException(status_code=500, detail=detail)
+            raise HTTPException(status_code=400, detail=detail)
 
         return result
 

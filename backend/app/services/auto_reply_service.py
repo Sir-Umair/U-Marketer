@@ -1,7 +1,14 @@
 from googleapiclient.discovery import build
 import base64
 from email.message import EmailMessage
-from app.services.email_service import get_user_credentials, send_email
+from app.services.email_service import (
+    get_user_credentials, 
+    send_email, 
+    is_account_healthy, 
+    set_account_rate_limit, 
+    parse_google_retry_after,
+    mark_user_auth_expired
+)
 from app.services.ai_service import ai_service
 from app.services.sheets_service import sheets_service
 from app.db import email_logs_collection, settings_collection, scanned_messages_collection
@@ -15,7 +22,7 @@ class AutoReplyService:
         self._account_cooldowns: dict = {}
 
     async def check_all_accounts_replies(self):
-        """Iterates over all active Gmail accounts in users_collection and processes inboxes concurrently."""
+        """Iterates over all active Gmail accounts in users_collection and processes inboxes sequentially with pause to protect quotas."""
         from app.db import users_collection
         if users_collection is None:
             return {"status": "error", "message": "Database not connected"}
@@ -30,9 +37,13 @@ class AutoReplyService:
                 return {"status": "success", "accounts": 0}
 
             print(f"[AutoReply] Running inbox check for {len(active_users)} connected account(s)...")
-            tasks = [self.check_and_reply_to_emails(u["email"]) for u in active_users if "email" in u]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            return {"status": "success", "accounts": len(tasks), "results": results}
+            results = []
+            for u in active_users:
+                if "email" in u:
+                    res = await self.check_and_reply_to_emails(u["email"])
+                    results.append(res)
+                    await asyncio.sleep(2.0) # Graceful delay between accounts
+            return {"status": "success", "accounts": len(results), "results": results}
         except Exception as e:
             print(f"[AutoReply] Error in check_all_accounts_replies: {e}")
             return {"status": "error", "message": str(e)}
@@ -43,6 +54,7 @@ class AutoReplyService:
         if not subject:
             return ""
         s = subject.strip().lower()
+        s = re.sub(r'[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]', '-', s)
         pattern = r'^(re|fwd|fw|aw|r)\s*(\[\d+\])?\s*:\s*'
         while re.match(pattern, s, flags=re.IGNORECASE):
             s = re.sub(pattern, '', s, count=1, flags=re.IGNORECASE).strip()
@@ -65,15 +77,15 @@ class AutoReplyService:
 
     async def check_and_reply_to_emails(self, user_email: str):
         """Checks for unread emails and processes them using Gmail API safely without tripping rate limits."""
-        # 1. Check if account is in rate-limit cooldown
-        if user_email in self._account_cooldowns:
-            cooldown_expiry = self._account_cooldowns[user_email]
-            if datetime.utcnow() < cooldown_expiry:
-                remaining_mins = max(1, int((cooldown_expiry - datetime.utcnow()).total_seconds() / 60))
-                print(f"[AutoReply] Skipping {user_email} (cooling down from Google API rate limits for ~{remaining_mins}m)")
-                return {"status": "rate_limited", "message": f"In cooldown for ~{remaining_mins}m"}
+        # 1. Check persistent health and rate-limit cooldown
+        is_healthy, status_str, mins_left = await is_account_healthy(user_email)
+        if not is_healthy:
+            if status_str == "rate_limited":
+                print(f"[AutoReply] Skipping {user_email} (cooling down from Google API rate limits for ~{mins_left}m)")
+                return {"status": "rate_limited", "message": f"In cooldown for ~{mins_left}m"}
             else:
-                del self._account_cooldowns[user_email]
+                print(f"[AutoReply] Skipping {user_email} (account is {status_str})")
+                return {"status": status_str, "message": f"Account is {status_str}"}
 
         try:
             # Check if auto-reply is enabled for this user (case-insensitive)
@@ -152,8 +164,9 @@ class AutoReplyService:
                 elif isinstance(res, Exception):
                     err_str = str(res)
                     if "429" in err_str or "rateLimitExceeded" in err_str:
-                        self._account_cooldowns[user_email] = datetime.utcnow() + timedelta(minutes=12)
-                        print(f"[AutoReply] Google API rate limit detected for {user_email}. Entering 12m cooldown.")
+                        cooldown_until = parse_google_retry_after(err_str)
+                        await set_account_rate_limit(user_email, cooldown_until)
+                        print(f"[AutoReply] Google API rate limit detected for {user_email}. Entering cooldown until {cooldown_until.strftime('%H:%M:%S UTC')}.")
                         break
 
             return {
@@ -166,11 +179,11 @@ class AutoReplyService:
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "rateLimitExceeded" in err_str or "User-rate limit exceeded" in err_str:
-                self._account_cooldowns[user_email] = datetime.utcnow() + timedelta(minutes=12)
-                print(f"[AutoReply] Gmail API Rate Limit exceeded for {user_email}. Pausing all checks for 12 minutes.")
-                return {"status": "rate_limited", "message": "Rate limit exceeded. Cooling down for 12m."}
+                cooldown_until = parse_google_retry_after(err_str)
+                await set_account_rate_limit(user_email, cooldown_until)
+                print(f"[AutoReply] Gmail API Rate Limit exceeded for {user_email}. Pausing all checks until {cooldown_until.strftime('%H:%M:%S UTC')}.")
+                return {"status": "rate_limited", "message": f"Rate limit exceeded. Cooling down until {cooldown_until.strftime('%H:%M:%S UTC')}."}
             elif "invalid_grant" in err_str or "Authentication expired" in err_str or "RefreshError" in type(e).__name__:
-                from app.services.email_service import mark_user_auth_expired
                 await mark_user_auth_expired(user_email, "Authentication expired. Please reconnect your Gmail account.")
                 print(f"[AutoReply] Authentication expired or invalid for {user_email}. User needs to reconnect Gmail account.")
             else:

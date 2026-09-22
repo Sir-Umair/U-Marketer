@@ -258,6 +258,68 @@ Return ONLY a valid JSON object:
             "Politely confirm unsubscriptions immediately with no further follow-up"
         ]
 
+    async def generate_campaign_name(self, prompt: str = None, subject: str = None, body: str = None) -> Dict[str, Any]:
+        """Generates a professional, concise marketing campaign title (2-5 words) and alternatives."""
+        import re
+        from datetime import datetime
+
+        context_parts = []
+        if prompt:
+            context_parts.append(f"Campaign Goal/Prompt: {prompt.strip()}")
+        if subject:
+            # Strip template variables before feeding to AI
+            clean_sub = re.sub(r'\{[^{}]*\}|\{\{[^{}]*\}\}|\[[^\[\]]*\]|\$[a-zA-Z_]+', '', subject).strip()
+            context_parts.append(f"Email Subject: {clean_sub}")
+        if body:
+            clean_body = re.sub(r'\{[^{}]*\}|\{\{[^{}]*\}\}|\[[^\[\]]*\]|\$[a-zA-Z_]+', '', body)[:300].strip()
+            context_parts.append(f"Email Preview: {clean_body}")
+
+        context_str = "\n".join(context_parts) if context_parts else "General B2B Cold Outreach Campaign"
+
+        if self.llm:
+            try:
+                ai_req = (
+                    f"Generate 3 distinct, professional marketing campaign names for an email outreach campaign.\n"
+                    f"Rules:\n"
+                    f"1. Must be concise (2 to 5 words each).\n"
+                    f"2. Professional, executive tone (e.g., 'Q1 SaaS Founder Outreach', 'AI Growth Partnership Pitch').\n"
+                    f"3. NEVER use placeholders or template brackets like {{name}} or {{company}}.\n"
+                    f"4. Return EXACTLY 3 lines, one per name, no bullet points, no quotes, no extra words.\n\n"
+                    f"{context_str}"
+                )
+                response = await self.llm.ainvoke([HumanMessage(content=ai_req)])
+                lines = [self._clean_text(l).strip(' "\'-*123.') for l in response.content.split("\n") if l.strip()]
+                lines = [l for l in lines if l and not re.search(r'\{|\}|\[|\]', l)]
+                if lines:
+                    primary = lines[0]
+                    alts = lines[1:3] if len(lines) > 1 else []
+                    return {"suggested_name": primary, "alternatives": alts}
+            except Exception as e:
+                print(f"[AI Service] Gemini campaign name generation notice: {e}")
+
+        # Intelligent heuristic fallback
+        now_str = datetime.now().strftime("%B %Y")
+        base_name = "Cold Outreach"
+        if prompt:
+            words = [w.capitalize() for w in re.sub(r'[^a-zA-Z0-9\s]', '', prompt).split() if len(w) > 3][:3]
+            if words:
+                base_name = " ".join(words)
+        elif subject:
+            clean_sub = re.sub(r'\{[^{}]*\}|\{\{[^{}]*\}\}|\[[^\[\]]*\]|\$[a-zA-Z_]+', '', subject).strip()
+            clean_sub = re.sub(r'^(re|fwd|fw|aw|r)\s*:\s*', '', clean_sub, flags=re.IGNORECASE).strip()
+            words = [w.capitalize() for w in clean_sub.split() if w][:4]
+            if words:
+                base_name = " ".join(words)
+
+        primary = f"{base_name} ({now_str})"
+        return {
+            "suggested_name": primary,
+            "alternatives": [
+                f"Growth Partnership Outreach - {now_str}",
+                f"Direct Client Pitch - {now_str}"
+            ]
+        }
+
     async def process_with_graph(self, email_data: Dict) -> Dict:
         """Invokes the LangGraph for a single incoming email."""
         initial_state: AgentState = {

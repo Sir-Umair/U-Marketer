@@ -14,12 +14,31 @@ export default function CampaignsPage() {
   const [selectedSenderAccounts, setSelectedSenderAccounts] = useState<string[]>([]);
   const [leadPromptModal, setLeadPromptModal] = useState<'no_leads' | 'none_selected' | null>(null);
   const [highlightLeadsPanel, setHighlightLeadsPanel] = useState(false);
+  const [leadSearchQuery, setLeadSearchQuery] = useState('');
+
+  const filteredAudienceLeads = leads.filter(l => {
+    if (!leadSearchQuery.trim()) return true;
+    const q = leadSearchQuery.toLowerCase().trim();
+    return (
+      (l.name || '').toLowerCase().includes(q) ||
+      (l.email || '').toLowerCase().includes(q) ||
+      (l.company || '').toLowerCase().includes(q)
+    );
+  });
   
   // Multi-Account Sender Dispatch State
-  const [dispatchMode, setDispatchMode] = useState<'single' | 'multi_account'>('multi_account');
+  const [dispatchMode, setDispatchMode] = useState<'all_accounts' | 'round_robin' | 'single'>('all_accounts');
   const [selectedSenderEmail, setSelectedSenderEmail] = useState<string>('');
+
+  const activeSendersCount = dispatchMode === 'single' ? 1 : Math.max(1, selectedSenderAccounts.length);
+  const totalDispatches = dispatchMode === 'all_accounts' 
+    ? selectedEmails.length * activeSendersCount 
+    : selectedEmails.length;
   
   // Main Email State
+  const [campaignName, setCampaignName] = useState('');
+  const [generatingName, setGeneratingName] = useState(false);
+  const [campaignNameSuggestions, setCampaignNameSuggestions] = useState<string[]>([]);
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
@@ -65,7 +84,10 @@ export default function CampaignsPage() {
         setLeads(validLeads);
         const accts = accountsData?.accounts || [];
         setAccounts(accts);
-        setSelectedSenderAccounts(accts.map((a: any) => a.email));
+        const healthyEmails = accts
+          .filter((a: any) => a.auth_status !== 'expired' && a.auth_status !== 'rate_limited')
+          .map((a: any) => a.email);
+        setSelectedSenderAccounts(healthyEmails.length > 0 ? healthyEmails : accts.map((a: any) => a.email));
         if (userData?.email) setSelectedSenderEmail(userData.email);
         if (validLeads.length > 0) setPreviewLeadId(validLeads[0].id);
       } catch (err) {
@@ -91,10 +113,15 @@ export default function CampaignsPage() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedEmails.length === leads.length) {
-      setSelectedEmails([]);
+    const targetPool = leadSearchQuery.trim() ? filteredAudienceLeads : leads;
+    const allPoolEmails = targetPool.map(l => l.email);
+    const allSelected = allPoolEmails.length > 0 && allPoolEmails.every(e => selectedEmails.includes(e));
+
+    if (allSelected) {
+      setSelectedEmails(selectedEmails.filter(e => !allPoolEmails.includes(e)));
     } else {
-      setSelectedEmails(leads.map(l => l.email));
+      const merged = Array.from(new Set([...selectedEmails, ...allPoolEmails]));
+      setSelectedEmails(merged);
     }
   };
 
@@ -107,6 +134,13 @@ export default function CampaignsPage() {
   };
 
   const toggleSenderAccount = (email: string) => {
+    const acc = accounts.find((a: any) => a.email === email);
+    if (acc?.auth_status === 'rate_limited') {
+      const mins = acc.cooldown_minutes_remaining || 15;
+      if (!confirm(`⚠️ Account ${email} is currently in a Google API rate-limit cooldown (~${mins}m remaining).\n\nIf selected, emails assigned to this account will be automatically rerouted to an active account or may fail.\n\nDo you still want to include this account in rotation?`)) {
+        return;
+      }
+    }
     if (selectedSenderAccounts.includes(email)) {
       if (selectedSenderAccounts.length === 1) return alert('At least one sender account must be selected.');
       setSelectedSenderAccounts(selectedSenderAccounts.filter(e => e !== email));
@@ -155,6 +189,19 @@ export default function CampaignsPage() {
       if (!subject) {
         setSubject(isGeneric ? 'Quick question regarding our services' : 'Quick question for {first_name} re: {company}');
       }
+      if (!campaignName) {
+        try {
+          const nameRes = await api.generateCampaignName({ prompt: aiPrompt });
+          if (nameRes?.suggested_name) {
+            setCampaignName(nameRes.suggested_name);
+            if (nameRes.alternatives && nameRes.alternatives.length > 0) {
+              setCampaignNameSuggestions(nameRes.alternatives);
+            }
+          }
+        } catch (e) {
+          // resilient fallback, silent catch
+        }
+      }
       if (!isGeneric && leadsToUse.length > 0) {
         setPreviewLeadId(leadsToUse[0].id);
         setShowPreview(true);
@@ -163,6 +210,27 @@ export default function CampaignsPage() {
       alert(err.message || 'Failed to generate AI content');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleGenerateCampaignName = async () => {
+    try {
+      setGeneratingName(true);
+      const res = await api.generateCampaignName({
+        prompt: aiPrompt || undefined,
+        subject: subject || undefined,
+        body: body || undefined
+      });
+      if (res?.suggested_name) {
+        setCampaignName(res.suggested_name);
+        if (res.alternatives && res.alternatives.length > 0) {
+          setCampaignNameSuggestions(res.alternatives);
+        }
+      }
+    } catch (err: any) {
+      console.warn('Failed to generate campaign name:', err);
+    } finally {
+      setGeneratingName(false);
     }
   };
 
@@ -265,15 +333,17 @@ export default function CampaignsPage() {
         ? (customDelayType === 'days' ? customDelayValue * 1440 : customDelayType === 'hours' ? customDelayValue * 60 : customDelayValue) 
         : followUpDelay;
 
-      const sender_emails = dispatchMode === 'multi_account' && selectedSenderAccounts.length > 0
+      const sender_emails = (dispatchMode === 'all_accounts' || dispatchMode === 'round_robin') && selectedSenderAccounts.length > 0
         ? selectedSenderAccounts
         : (selectedSenderEmail ? [selectedSenderEmail] : (user?.email ? [user.email] : undefined));
 
       const result = await api.sendBulkEmails({
         emails: selectedEmails,
+        campaign_name: campaignName.trim() || undefined,
         subject,
         body,
         sender_emails,
+        dispatch_mode: dispatchMode,
         attachment,
         follow_up_delay: finalDelay,
         follow_up_body: isCustomFollowUp ? followUpBody : undefined,
@@ -285,8 +355,24 @@ export default function CampaignsPage() {
         test_mode: false
       });
 
+      let breakdownMsg = '';
+      if (result.distribution && Object.keys(result.distribution).length > 0) {
+        breakdownMsg = '\n\nSender Account Distribution:\n' + Object.entries(result.distribution)
+          .map(([acc, count]) => `• ${acc}: ${count} email(s)`)
+          .join('\n');
+      }
+      let failoverMsg = '';
+      if (result.failover_events && result.failover_events.length > 0) {
+        failoverMsg = `\n\n⚠️ Notice: ${result.failover_events.length} email(s) were rerouted because an account was rate-limited:\n` +
+          result.failover_events.map((f: any) => `• To ${f.recipient}: ${f.assigned_sender} → ${f.actual_sender}`).join('\n');
+      }
+      let warningMsg = '';
+      if (result.warnings && result.warnings.length > 0) {
+        warningMsg = '\n\n' + result.warnings.join('\n');
+      }
+
       if (result.is_background || result.status === 'queued') {
-        alert(`🚀 Campaign Launched!\n\nEmail #1 was sent initially.\nSubsequent emails are sending with your custom delay of ${delayBetweenEmails}s in between.\nEstimated duration: ~${result.estimated_minutes || 1} min.\n\nYou can navigate away safely; live progress is tracking in real time.`);
+        alert(`🚀 Campaign Launched!\n\nEmail #1 was sent initially.\nSubsequent emails are sending with your custom delay of ${delayBetweenEmails}s in between across your selected accounts.${breakdownMsg}${failoverMsg}${warningMsg}\n\nEstimated duration: ~${result.estimated_minutes || 1} min.\n\nYou can navigate away safely; live progress is tracking in real time.`);
         setSubject('');
         setBody('');
         setFollowUpBody('');
@@ -295,7 +381,7 @@ export default function CampaignsPage() {
         setAttachment(null);
         setSelectedEmails([]);
       } else if (result.failed === 0) {
-        alert(`🚀 Campaign complete! Successfully sent to all ${result.successful} leads using ${result.senders_used ? result.senders_used.length : 1} sender account(s).`);
+        alert(`🚀 Campaign Complete!\n\nSuccessfully sent to all ${result.successful} leads across ${result.senders_used ? result.senders_used.length : 1} sender account(s).${breakdownMsg}${failoverMsg}${warningMsg}`);
         setSubject('');
         setBody('');
         setFollowUpBody('');
@@ -304,7 +390,7 @@ export default function CampaignsPage() {
         setAttachment(null);
         setSelectedEmails([]);
       } else {
-        alert(`⚠️ Campaign Dispatch Status:\n✅ Successful: ${result.successful}\n❌ Failed: ${result.failed}\n${result.error ? '\nDetails: ' + result.error : ''}`);
+        alert(`⚠️ Campaign Dispatch Status:\n✅ Successful: ${result.successful}\n❌ Failed: ${result.failed}${breakdownMsg}${failoverMsg}${warningMsg}\n${result.error ? '\nDetails: ' + result.error : ''}`);
       }
     } catch (err: any) {
       alert(`❌ Campaign Failed:\n\n${err.message}`);
@@ -356,36 +442,68 @@ export default function CampaignsPage() {
               Distribute campaign emails across multiple connected Gmail accounts to protect domain reputation and maximize inbox deliverability.
             </p>
 
-            <div className="grid-2col" style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
               <label 
                 style={{ 
                   display: 'flex', 
-                  alignItems: 'center', 
+                  alignItems: 'flex-start', 
                   gap: '0.75rem', 
                   padding: '0.875rem 1rem', 
                   borderRadius: '8px', 
-                  background: dispatchMode === 'multi_account' ? '#dbeafe' : 'white', 
-                  border: dispatchMode === 'multi_account' ? '2px solid #3b82f6' : '1px solid #cbd5e1', 
+                  background: dispatchMode === 'all_accounts' ? '#dbeafe' : 'white', 
+                  border: dispatchMode === 'all_accounts' ? '2px solid #2563eb' : '1px solid #cbd5e1', 
                   cursor: 'pointer'
                 }}
               >
                 <input 
                   type="radio" 
                   name="dispatch_mode" 
-                  checked={dispatchMode === 'multi_account'}
-                  onChange={() => setDispatchMode('multi_account')}
-                  style={{ width: '18px', height: '18px' }}
+                  checked={dispatchMode === 'all_accounts'}
+                  onChange={() => setDispatchMode('all_accounts')}
+                  style={{ width: '18px', height: '18px', marginTop: '2px' }}
                 />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e3a8a' }}>🔄 Multi-Mail Round Robin</div>
-                  <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Rotate sends across all selected accounts</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e3a8a' }}>🚀 Send from ALL Accounts</div>
+                  <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '2px' }}>
+                    All selected Gmail accounts send to every lead ({activeSendersCount} accounts × {selectedEmails.length} leads = {totalDispatches} emails)
+                  </div>
+                  <span style={{ display: 'inline-block', marginTop: '4px', background: '#2563eb', color: 'white', fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                    Recommended • Multi-Sender
+                  </span>
                 </div>
               </label>
 
               <label 
                 style={{ 
                   display: 'flex', 
-                  alignItems: 'center', 
+                  alignItems: 'flex-start', 
+                  gap: '0.75rem', 
+                  padding: '0.875rem 1rem', 
+                  borderRadius: '8px', 
+                  background: dispatchMode === 'round_robin' ? '#dbeafe' : 'white', 
+                  border: dispatchMode === 'round_robin' ? '2px solid #3b82f6' : '1px solid #cbd5e1', 
+                  cursor: 'pointer'
+                }}
+              >
+                <input 
+                  type="radio" 
+                  name="dispatch_mode" 
+                  checked={dispatchMode === 'round_robin'}
+                  onChange={() => setDispatchMode('round_robin')}
+                  style={{ width: '18px', height: '18px', marginTop: '2px' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e3a8a' }}>🔄 Round-Robin Rotation</div>
+                  <div style={{ fontSize: '0.75rem', color: '#3b82f6', marginTop: '2px' }}>
+                    Distribute leads evenly across accounts (1 email per lead)
+                  </div>
+                </div>
+              </label>
+
+              <label 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'flex-start', 
                   gap: '0.75rem', 
                   padding: '0.875rem 1rem', 
                   borderRadius: '8px', 
@@ -399,23 +517,47 @@ export default function CampaignsPage() {
                   name="dispatch_mode" 
                   checked={dispatchMode === 'single'}
                   onChange={() => setDispatchMode('single')}
-                  style={{ width: '18px', height: '18px' }}
+                  style={{ width: '18px', height: '18px', marginTop: '2px' }}
                 />
                 <div>
                   <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e3a8a' }}>👤 Single Account Only</div>
-                  <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Send entire batch from 1 selected account</div>
+                  <div style={{ fontSize: '0.75rem', color: '#3b82f6', marginTop: '2px' }}>
+                    Send entire batch from 1 selected account
+                  </div>
                 </div>
               </label>
             </div>
 
-            {dispatchMode === 'multi_account' && (
+            {dispatchMode !== 'single' && (
               <div style={{ background: 'white', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
-                <label className="label" style={{ color: '#1e3a8a', marginBottom: '0.5rem' }}>Connected Accounts in Rotation ({selectedSenderAccounts.length}/{accounts.length || 1})</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <label className="label" style={{ color: '#1e3a8a', margin: 0 }}>
+                    Connected Accounts in Dispatch Pool ({selectedSenderAccounts.length}/{accounts.length || 1})
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSenderAccounts(accounts.map((a: any) => a.email))}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px', background: '#eff6ff', border: '1px solid #3b82f6', borderRadius: '4px', color: '#1d4ed8', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSenderAccounts(selectedSenderAccounts.slice(0, 1))}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '4px', color: '#64748b', cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                   {accounts.length > 0 ? (
                     accounts.map(acc => {
                       const isSelected = selectedSenderAccounts.includes(acc.email);
                       const isExpired = acc.auth_status === 'expired';
+                      const isRateLimited = acc.auth_status === 'rate_limited';
                       return (
                         <button
                           key={acc.id}
@@ -430,14 +572,18 @@ export default function CampaignsPage() {
                             alignItems: 'center',
                             gap: '0.4rem',
                             background: isSelected ? '#eff6ff' : '#f8fafc',
-                            border: isSelected ? '1px solid #3b82f6' : '1px solid #cbd5e1',
-                            color: isSelected ? '#1d4ed8' : '#64748b'
+                            border: isSelected ? (isRateLimited ? '1px solid #f59e0b' : '1px solid #3b82f6') : '1px solid #cbd5e1',
+                            color: isSelected ? (isRateLimited ? '#b45309' : '#1d4ed8') : '#64748b'
                           }}
                         >
                           <span>{isSelected ? '☑' : '☐'}</span>
                           <span>{acc.email}</span>
                           {isExpired ? (
                             <span style={{ background: '#fee2e2', color: '#991b1b', fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Reconnect</span>
+                          ) : isRateLimited ? (
+                            <span style={{ background: '#fef3c7', color: '#92400e', fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>
+                              ⏳ Cooldown (~{acc.cooldown_minutes_remaining || 15}m)
+                            </span>
                           ) : (
                             <span style={{ background: '#dcfce7', color: '#166534', fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px' }}>Active</span>
                           )}
@@ -446,6 +592,14 @@ export default function CampaignsPage() {
                     })
                   ) : (
                     <span style={{ fontSize: '0.875rem', color: '#1e40af' }}>{user?.email || 'Default Account'} (Active)</span>
+                  )}
+                </div>
+
+                <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.8rem', background: dispatchMode === 'all_accounts' ? '#ecfdf5' : '#eff6ff', border: dispatchMode === 'all_accounts' ? '1px solid #a7f3d0' : '1px solid #bfdbfe', color: dispatchMode === 'all_accounts' ? '#065f46' : '#1e40af' }}>
+                  {dispatchMode === 'all_accounts' ? (
+                    <span>🔥 <strong>All Accounts Active:</strong> All <strong>{selectedSenderAccounts.length}</strong> selected Gmail accounts will each dispatch an email to your <strong>{selectedEmails.length}</strong> selected lead(s). Total dispatches: <strong>{totalDispatches}</strong>.</span>
+                  ) : (
+                    <span>🔄 <strong>Round Robin:</strong> <strong>{selectedEmails.length}</strong> lead(s) will be divided evenly across your <strong>{selectedSenderAccounts.length}</strong> selected account(s). Total dispatches: <strong>{selectedEmails.length}</strong>.</span>
                   )}
                 </div>
               </div>
@@ -463,7 +617,7 @@ export default function CampaignsPage() {
                   {accounts.length > 0 ? (
                     accounts.map(acc => (
                       <option key={acc.id} value={acc.email}>
-                        {acc.name ? `${acc.name} (${acc.email})` : acc.email} {acc.auth_status === 'expired' ? ' (Expired - Needs Reconnect)' : ''}
+                        {acc.name ? `${acc.name} (${acc.email})` : acc.email} {acc.auth_status === 'expired' ? ' (Expired - Needs Reconnect)' : acc.auth_status === 'rate_limited' ? ` (⏳ Cooldown ~${acc.cooldown_minutes_remaining || 15}m)` : ' (Active)'}
                       </option>
                     ))
                   ) : (
@@ -610,6 +764,139 @@ export default function CampaignsPage() {
             ) : (
               /* Composition Form */
               <>
+                {/* Custom Campaign Name Section */}
+                <div style={{
+                  background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '10px',
+                  padding: '1.15rem',
+                  marginBottom: '1.25rem',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <label className="label" style={{ margin: 0, fontWeight: 700, fontSize: '0.925rem', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span>🏷️</span>
+                      <span>Campaign Title / Identifier</span>
+                      <span style={{ fontSize: '0.725rem', background: campaignName ? '#dcfce7' : '#e2e8f0', color: campaignName ? '#166534' : '#475569', padding: '0.15rem 0.5rem', borderRadius: '999px', fontWeight: 600 }}>
+                        {campaignName ? 'Custom Name Set' : 'Auto-Identified'}
+                      </span>
+                    </label>
+                    <span style={{ fontSize: '0.775rem', color: '#64748b' }}>
+                      Names this campaign across your Dashboard, Responses & Analytics
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <input 
+                      className="input" 
+                      placeholder="e.g. Q1 SaaS Founder Outreach, Spring Partnership Pitch..." 
+                      value={campaignName}
+                      onChange={e => setCampaignName(e.target.value)}
+                      style={{ flex: 1, minWidth: '220px', background: 'white', fontWeight: 500 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateCampaignName}
+                      disabled={generatingName}
+                      style={{
+                        background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '0.55rem 1rem',
+                        fontSize: '0.825rem',
+                        fontWeight: 600,
+                        cursor: generatingName ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 2px 4px rgba(79, 70, 229, 0.25)'
+                      }}
+                      title="Generate a crisp, professional marketing campaign name using AI"
+                    >
+                      {generatingName ? '✨ Thinking...' : '✨ AI Suggest Name'}
+                    </button>
+                    {campaignName && (
+                      <button
+                        type="button"
+                        onClick={() => setCampaignName('')}
+                        style={{
+                          background: '#f1f5f9',
+                          color: '#64748b',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '8px',
+                          padding: '0.55rem 0.75rem',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                        title="Clear custom campaign name"
+                      >
+                        ✕ Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {/* AI Alternative Suggestions (if returned) */}
+                  {campaignNameSuggestions.length > 0 && (
+                    <div style={{ marginTop: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#6366f1' }}>Alternative AI ideas:</span>
+                      {campaignNameSuggestions.map((alt, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setCampaignName(alt)}
+                          style={{
+                            background: 'white',
+                            border: '1px solid #c7d2fe',
+                            color: '#4338ca',
+                            padding: '0.2rem 0.55rem',
+                            borderRadius: '999px',
+                            fontSize: '0.725rem',
+                            fontWeight: 500,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseOver={(e) => (e.currentTarget.style.borderColor = '#6366f1')}
+                          onMouseOut={(e) => (e.currentTarget.style.borderColor = '#c7d2fe')}
+                        >
+                          + {alt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Quick Preset Chips */}
+                  <div style={{ marginTop: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Quick presets:</span>
+                    {[
+                      '⚡ Founder Cold Outreach',
+                      '🤝 Growth Partnership Pitch',
+                      '🚀 Product Pilot Announcement',
+                      '💼 Agency Client Outreach',
+                      '🎯 Lead Reactivation Campaign'
+                    ].map(preset => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setCampaignName(preset)}
+                        style={{
+                          background: 'white',
+                          border: '1px solid #e2e8f0',
+                          color: '#475569',
+                          padding: '0.18rem 0.5rem',
+                          borderRadius: '6px',
+                          fontSize: '0.725rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <label className="label">Subject Line</label>
                   <input 
@@ -936,7 +1223,7 @@ export default function CampaignsPage() {
             onClick={handleSendCampaign}
             disabled={sending || selectedEmails.length === 0}
           >
-            {sending ? '🚀 Launching Campaign...' : `🚀 Launch Personalized Campaign to ${selectedEmails.length} Lead(s)`}
+            {sending ? '🚀 Launching Campaign...' : `🚀 Launch Campaign (${totalDispatches} Email${totalDispatches === 1 ? '' : 's'} across ${activeSendersCount} Account${activeSendersCount === 1 ? '' : 's'})`}
           </button>
         </div>
 
@@ -959,9 +1246,29 @@ export default function CampaignsPage() {
               <Link href="/leads" style={{ fontSize: '0.75rem', color: '#2563eb', fontWeight: 600, textDecoration: 'underline' }}>Manage Leads →</Link>
             </div>
 
-            <div style={{ padding: '0.75rem', background: '#f0f9ff', borderRadius: '6px', border: '1px solid #bae6fd', marginBottom: '1.25rem', fontSize: '0.875rem', color: '#0369a1' }}>
+            <div style={{ padding: '0.75rem', background: '#f0f9ff', borderRadius: '6px', border: '1px solid #bae6fd', marginBottom: '0.85rem', fontSize: '0.875rem', color: '#0369a1' }}>
               Selected: <strong>{selectedEmails.length}</strong> / {leads.length} leads
             </div>
+
+            {leads.length > 3 && (
+              <div style={{ marginBottom: '0.85rem' }}>
+                <input
+                  type="text"
+                  placeholder="🔍 Filter leads in list..."
+                  value={leadSearchQuery}
+                  onChange={e => setLeadSearchQuery(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '0.45rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #cbd5e1',
+                    fontSize: '0.8rem',
+                    boxSizing: 'border-box',
+                    background: '#ffffff'
+                  }}
+                />
+              </div>
+            )}
             
             <button 
               className="btn btn-outline" 
@@ -969,7 +1276,7 @@ export default function CampaignsPage() {
               onClick={toggleSelectAll}
               disabled={leads.length === 0}
             >
-              {selectedEmails.length === leads.length && leads.length > 0 ? 'Deselect All' : 'Select All Leads'}
+              {selectedEmails.length === leads.length && leads.length > 0 ? 'Deselect All' : (leadSearchQuery.trim() ? `Select All Filtered (${filteredAudienceLeads.length})` : 'Select All Leads')}
             </button>
 
             <div style={{ maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
@@ -982,9 +1289,13 @@ export default function CampaignsPage() {
                     ➕ Add Leads
                   </Link>
                 </div>
+              ) : filteredAudienceLeads.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted-foreground)', fontSize: '0.85rem' }}>
+                  No leads match &ldquo;{leadSearchQuery}&rdquo;
+                </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  {leads.map(lead => (
+                  {filteredAudienceLeads.map(lead => (
                     <label 
                       key={lead.id} 
                       style={{ 

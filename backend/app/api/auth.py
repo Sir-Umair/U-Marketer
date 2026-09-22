@@ -373,20 +373,47 @@ async def get_me(user: dict = Depends(get_current_user)):
 
 @router.get("/accounts")
 async def get_connected_accounts(user: dict = Depends(get_current_user)):
-    """Returns all connected Gmail user accounts available for multi-account dispatching."""
+    """Returns all connected Gmail user accounts available for multi-account dispatching with real-time health status."""
     if users_collection is None:
         raise HTTPException(status_code=500, detail="Database connection not established")
     
     cursor = users_collection.find({"access_token": {"$exists": True}})
     accounts = []
+    now = datetime.utcnow()
     async for account in cursor:
+        auth_status = account.get("auth_status", "active")
+        auth_error = account.get("auth_error")
+        rate_until = account.get("rate_limit_until")
+        mins_remaining = 0
+
+        if rate_until:
+            if isinstance(rate_until, str):
+                try:
+                    rate_until = datetime.fromisoformat(rate_until.rstrip("Z"))
+                except Exception:
+                    rate_until = None
+            if rate_until and now < rate_until:
+                mins_remaining = max(1, int((rate_until - now).total_seconds() / 60))
+                auth_status = "rate_limited"
+                auth_error = f"Google rate-limit cooldown (~{mins_remaining}m remaining)"
+            elif rate_until and now >= rate_until:
+                # Cooldown period completed! Auto-restore
+                auth_status = "active"
+                auth_error = None
+                await users_collection.update_one(
+                    {"_id": account["_id"]},
+                    {"$set": {"auth_status": "active"}, "$unset": {"rate_limit_until": "", "auth_error": ""}}
+                )
+
         accounts.append({
             "id": str(account["_id"]),
             "email": account.get("email"),
             "name": account.get("name", ""),
             "last_login": account.get("last_login"),
-            "auth_status": account.get("auth_status", "active"),
-            "auth_error": account.get("auth_error"),
+            "auth_status": auth_status,
+            "auth_error": auth_error,
+            "cooldown_minutes_remaining": mins_remaining,
+            "rate_limit_until": rate_until.isoformat() if rate_until and now < rate_until else None,
             "is_current": account.get("email") == user.get("email")
         })
     return {"accounts": accounts}

@@ -16,7 +16,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="app-container">
           <Sidebar />
           <main className="main-content">
-            {children}
+            <div className="main-content-inner">
+              {children}
+            </div>
           </main>
         </div>
       )}

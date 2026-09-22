@@ -66,3 +66,17 @@ email_logs_collection = CollectionProxy("email_logs")
 settings_collection = CollectionProxy("settings")
 follow_ups_collection = CollectionProxy("follow_ups")
 scanned_messages_collection = CollectionProxy("scanned_inbox_messages")
+
+async def init_db_indexes():
+    """Ensures scalable compound indexes on frequently queried collections."""
+    try:
+        db_instance = _manager.get_db()
+        logs_col = db_instance["email_logs"]
+        await logs_col.create_index([("campaign_id", 1), ("type", 1), ("timestamp", -1)], background=True)
+        await logs_col.create_index([("user_email", 1), ("type", 1)], background=True)
+        await logs_col.create_index([("thread_id", 1)], background=True)
+        await logs_col.create_index([("type", 1), ("timestamp", -1)], background=True)
+        print("[DB] Optimized database indexes initialized successfully.")
+    except Exception as e:
+        print(f"[DB] Notice: index creation skipped or encountered error: {e}")
+

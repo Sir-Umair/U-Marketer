@@ -26,6 +26,26 @@ export default function LeadsPage() {
   
   const [importing, setImporting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredLeads = leads.filter(l => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return (
+      (l.name || '').toLowerCase().includes(q) ||
+      (l.email || '').toLowerCase().includes(q) ||
+      (l.company || '').toLowerCase().includes(q) ||
+      (l.notes || '').toLowerCase().includes(q)
+    );
+  });
+
+  const toggleSelectAllFiltered = () => {
+    if (selectedIds.size === filteredLeads.length && filteredLeads.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredLeads.map(l => l.id)));
+    }
+  };
 
   const fetchLeads = useCallback(async () => {
     try {
@@ -308,6 +328,75 @@ export default function LeadsPage() {
         </div>
       )}
 
+      {/* Search & Selection Controls Bar */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: '1rem',
+        flexWrap: 'wrap',
+        gap: '0.75rem'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 300px', maxWidth: '100%' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <input
+              type="text"
+              placeholder="🔍 Search leads by name, email, or company..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '0.55rem 1rem',
+                borderRadius: '8px',
+                border: '1px solid #d1d5db',
+                fontSize: '0.875rem',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#9ca3af',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <button
+            onClick={toggleSelectAllFiltered}
+            disabled={filteredLeads.length === 0}
+            style={{
+              padding: '0.55rem 0.9rem',
+              borderRadius: '8px',
+              border: '1px solid #d1d5db',
+              background: '#f8fafc',
+              fontSize: '0.825rem',
+              fontWeight: 600,
+              color: '#334155',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {selectedIds.size === filteredLeads.length && filteredLeads.length > 0 ? 'Deselect All' : 'Select All Filtered'}
+          </button>
+        </div>
+
+        <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500 }}>
+          👥 Showing <strong>{filteredLeads.length}</strong> of <strong>{leads.length}</strong> leads across workspace
+        </div>
+      </div>
+
       {/* Table */}
       <div className="table-container" style={{ backgroundColor: 'white', borderRadius: '0.75rem', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e5e7eb', minHeight: '200px' }}>
         {loading ? (
@@ -318,6 +407,10 @@ export default function LeadsPage() {
         ) : leads.length === 0 ? (
           <div style={{ padding: '4rem', textAlign: 'center', color: '#6b7280' }}>
             No leads found yet. Start by importing a Google Sheet URL, uploading a CSV/Excel file, or adding one manually!
+          </div>
+        ) : filteredLeads.length === 0 ? (
+          <div style={{ padding: '3rem', textAlign: 'center', color: '#6b7280' }}>
+            No leads match your search query &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -330,7 +423,7 @@ export default function LeadsPage() {
               </tr>
             </thead>
             <tbody>
-              {leads.map((lead) => {
+              {filteredLeads.map((lead) => {
                 const isSelected = selectedIds.has(lead.id);
                 return (
                   <tr

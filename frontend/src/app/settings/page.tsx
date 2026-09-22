@@ -210,7 +210,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Developer Portal Card */}
-        <div className="card" style={{ gridColumn: 'span 2', borderLeft: '4px solid #6366f1', background: 'linear-gradient(to right, #f8fafc, #f1f5f9)' }}>
+        {/* <div className="card" style={{ gridColumn: 'span 2', borderLeft: '4px solid #6366f1', background: 'linear-gradient(to right, #f8fafc, #f1f5f9)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
@@ -230,10 +230,10 @@ export default function SettingsPage() {
               <span>⚡ Access Developer Portal</span>
             </Link>
           </div>
-        </div>
+        </div> */}
 
         {/* Personal Details */}
-        <div className="card">
+        {/* <div className="card">
           <h3>Personal Details</h3>
           {loading ? (
             <p>Loading settings...</p>
@@ -265,10 +265,10 @@ export default function SettingsPage() {
               </button>
             </>
           )}
-        </div>
+        </div> */}
 
         {/* Connection Status */}
-        <div className="card">
+        {/* <div className="card">
           <h3>System & Engine Status</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)' }}>
@@ -286,10 +286,10 @@ export default function SettingsPage() {
               <span style={{ padding: '0.25rem 0.5rem', background: '#dcfce7', color: '#166534', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>Active</span>
             </div>
           </div>
-        </div>
+        </div> */}
 
         {/* Marketing Policies */}
-        <div className="card" style={{ gridColumn: 'span 2' }}>
+        {/* <div className="card" style={{ gridColumn: 'span 2' }}>
           <h3>Marketing Policies</h3>
           <p style={{ marginBottom: '1rem' }}>Define how your AI agent handles replies and follow-ups.</p>
           
@@ -326,7 +326,7 @@ export default function SettingsPage() {
           >
             {savingPolicy ? 'Applying...' : 'Apply Strategy'}
           </button>
-        </div>
+        </div> */}
       </div>
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes slideIn {

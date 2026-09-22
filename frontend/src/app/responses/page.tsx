@@ -25,6 +25,7 @@ interface LeadResponse {
 
 interface CampaignDashboard {
   id: string;
+  name?: string;
   subject: string;
   timestamp: string;
   leads: LeadResponse[];
@@ -125,6 +126,20 @@ export default function ResponsesPage() {
     }
   }
 
+  async function handleRenameCampaign(e: React.MouseEvent, id: string, currentName: string) {
+    e.stopPropagation();
+    const newName = window.prompt('Enter new campaign title:', currentName);
+    if (!newName || !newName.trim()) return;
+    try {
+      const res = await api.renameCampaign(id, newName.trim());
+      const updated = res.name || newName.trim();
+      setCampaigns(prev => prev.map(c => c.id === id ? { ...c, name: updated, subject: updated } : c));
+      showToast('Campaign renamed successfully.');
+    } catch (err: any) {
+      showToast('Failed to rename campaign: ' + (err.message || 'Unknown error'), 'error');
+    }
+  }
+
   function exportCSV() {
     // Collect all leads from all campaigns
     const allLeads = campaigns.flatMap(c => c.leads.map(l => ({ campaign: c.subject, ...l })));
@@ -219,7 +234,7 @@ export default function ResponsesPage() {
                       }}
                       onClick={() => setExpandedCampaign(isOpen ? null : c.id)}
                     >
-                      <td style={{ padding: '1rem', fontWeight: 600 }}>{c.subject || 'Untitled Campaign'}</td>
+                      <td style={{ padding: '1rem', fontWeight: 600 }}>{c.name || c.subject || 'Untitled Campaign'}</td>
                       <td style={{ padding: '1rem', fontSize: '0.875rem' }}>{new Date(c.timestamp).toLocaleDateString()}</td>
                       <td style={{ padding: '1rem' }}>
                         <span style={{ background: '#e0e7ff', color: '#4338ca', padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600 }}>
@@ -233,26 +248,43 @@ export default function ResponsesPage() {
                           ) : (
                             <span style={{ color: 'var(--muted-foreground)' }}>No replies yet</span>
                           )}
-                          <button 
-                            onClick={(e) => handleDeleteCampaign(e, c.id)}
-                            style={{ 
-                              background: 'transparent', 
-                              border: 'none', 
-                              color: '#ef4444', 
-                              padding: '0.25rem 0.5rem', 
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              fontSize: '0.7rem',
-                              fontWeight: 600,
-                              marginLeft: '1rem',
-                              opacity: 0.6,
-                              transition: 'opacity 0.2s'
-                            }}
-                            onMouseOver={(e) => e.currentTarget.style.opacity = '1'}
-                            onMouseOut={(e) => e.currentTarget.style.opacity = '0.6'}
-                          >
-                            Delete
-                          </button>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <button 
+                              onClick={(e) => handleRenameCampaign(e, c.id, c.name || c.subject || 'Untitled Campaign')}
+                              style={{ 
+                                background: 'transparent', 
+                                border: '1px solid #cbd5e1', 
+                                color: '#475569', 
+                                padding: '0.25rem 0.5rem', 
+                                borderRadius: '4px', 
+                                cursor: 'pointer', 
+                                fontSize: '0.7rem', 
+                                fontWeight: 600 
+                              }}
+                              title="Rename campaign"
+                            >
+                              Rename
+                            </button>
+                            <button 
+                              onClick={(e) => handleDeleteCampaign(e, c.id)}
+                              style={{ 
+                                background: 'transparent', 
+                                border: 'none', 
+                                color: '#ef4444', 
+                                padding: '0.25rem 0.5rem', 
+                                borderRadius: '4px', 
+                                cursor: 'pointer', 
+                                fontSize: '0.7rem', 
+                                fontWeight: 600,
+                                opacity: 0.6,
+                                transition: 'opacity 0.2s'
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.opacity = '1'}
+                              onMouseOut={(e) => e.currentTarget.style.opacity = '0.6'}
+                            >
+                              Delete
+                            </button>
+                          </div>
                         </div>
                       </td>
                     </tr>

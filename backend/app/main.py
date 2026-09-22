@@ -16,10 +16,12 @@ from app.services.auto_reply_service import auto_reply_service
 
 async def background_monitoring_task():
     """Runs continuously in the background to sync emails across all connected accounts and send follow-ups."""
+    # Grace period on startup to let the server initialize and avoid reload storms
+    await asyncio.sleep(15)
     while True:
         try:
             print("[Background Worker] Executing auto-reply and follow-up checks...")
-            # 1. Process incoming replies for all connected accounts concurrently
+            # 1. Process incoming replies for all connected accounts sequentially
             await auto_reply_service.check_all_accounts_replies()
             
             # 2. Send pending AI automated follow-ups
@@ -28,11 +30,14 @@ async def background_monitoring_task():
         except Exception as e:
             print(f"[Background Worker] Error: {e}")
             
-        await asyncio.sleep(120) # Run every 2 minutes to prevent Google API rate limits
+        await asyncio.sleep(300) # Run every 5 minutes to prevent Google API rate limits
+
+from app.db import init_db_indexes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: spawn the background task
+    # Startup: ensure optimized DB indexes & spawn background worker
+    asyncio.create_task(init_db_indexes())
     task = asyncio.create_task(background_monitoring_task())
     yield
     # Shutdown: wait and cancel

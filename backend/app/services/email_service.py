@@ -16,7 +16,7 @@ import google.auth.exceptions
 async def mark_user_auth_expired(user_email: str, reason: str = "Authentication expired. Please reconnect your Gmail account."):
     if users_collection is not None:
         await users_collection.update_one(
-            {"email": user_email},
+            {"email": {"$regex": f"^{re.escape(user_email.strip())}$", "$options": "i"}},
             {
                 "$set": {
                     "auth_status": "expired",
@@ -25,11 +25,71 @@ async def mark_user_auth_expired(user_email: str, reason: str = "Authentication 
             }
         )
 
+def parse_google_retry_after(error_str: str) -> datetime:
+    """Extracts 'Retry after <ISO_TIMESTAMP>' from Google 429 error, adding a 60-second safety margin."""
+    match = re.search(r'Retry after\s+([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z?)', str(error_str))
+    if match:
+        iso_str = match.group(1).rstrip("Z")
+        try:
+            retry_dt = datetime.fromisoformat(iso_str)
+            return retry_dt + timedelta(seconds=60)
+        except Exception:
+            pass
+    # Fallback to 16 minutes from now if timestamp cannot be parsed
+    return datetime.utcnow() + timedelta(minutes=16)
+
+async def set_account_rate_limit(user_email: str, until: datetime):
+    """Persists rate-limit cooldown timestamp and status in MongoDB users_collection."""
+    if users_collection is not None:
+        await users_collection.update_one(
+            {"email": {"$regex": f"^{re.escape(user_email.strip())}$", "$options": "i"}},
+            {
+                "$set": {
+                    "auth_status": "rate_limited",
+                    "rate_limit_until": until,
+                    "auth_error": f"Google rate limit cooldown until {until.strftime('%H:%M:%S UTC')}"
+                }
+            }
+        )
+        print(f"[EmailService] Account {user_email} set to rate_limited until {until.strftime('%H:%M:%S UTC')}")
+
+async def is_account_healthy(user_email: str) -> tuple[bool, str, int]:
+    """
+    Checks if account is healthy for sending.
+    Returns: (is_healthy, status_str, cooldown_minutes_remaining)
+    """
+    if users_collection is None:
+        return True, "active", 0
+    u_doc = await users_collection.find_one(
+        {"email": {"$regex": f"^{re.escape(user_email.strip())}$", "$options": "i"}}
+    )
+    if not u_doc:
+        return False, "not_found", 0
+    if u_doc.get("auth_status") == "expired":
+        return False, "expired", 0
+    rate_until = u_doc.get("rate_limit_until")
+    if rate_until:
+        if isinstance(rate_until, str):
+            try:
+                rate_until = datetime.fromisoformat(rate_until.rstrip("Z"))
+            except Exception:
+                rate_until = None
+        if rate_until and datetime.utcnow() < rate_until:
+            mins_left = max(1, int((rate_until - datetime.utcnow()).total_seconds() / 60))
+            return False, "rate_limited", mins_left
+        else:
+            # Cooldown expired! Auto-restore status to active
+            await users_collection.update_one(
+                {"_id": u_doc["_id"]},
+                {"$set": {"auth_status": "active"}, "$unset": {"rate_limit_until": "", "auth_error": ""}}
+            )
+    return True, "active", 0
+
 async def get_user_credentials(user_email: str) -> Credentials:
     """Retrieve and refresh Google OAuth credentials for a user."""
     if users_collection is None:
         raise Exception("Database connection not established. Cannot fetch credentials.")
-    user = await users_collection.find_one({"email": user_email})
+    user = await users_collection.find_one({"email": {"$regex": f"^{re.escape(user_email.strip())}$", "$options": "i"}})
     if not user:
         raise Exception(f"User {user_email} not found or not connected to Gmail.")
     
@@ -53,7 +113,7 @@ async def get_user_credentials(user_email: str) -> Credentials:
             await asyncio.to_thread(creds.refresh, Request())
             # Update tokens in DB
             await users_collection.update_one(
-                {"email": user_email},
+                {"_id": user["_id"]},
                 {
                     "$set": {
                         "access_token": encrypt_data(creds.token),
@@ -68,7 +128,7 @@ async def get_user_credentials(user_email: str) -> Credentials:
             
     return creds
 
-async def send_email(to_email: str, subject: str, body: str, user_email: str, skip_log: bool = False, attachment_data: bytes = None, attachment_name: str = None, follow_up_delay: int = 0, follow_up_body: str = None, auto_reply_prompt: str = None, campaign_id: str = None) -> dict:
+async def send_email(to_email: str, subject: str, body: str, user_email: str, skip_log: bool = False, attachment_data: bytes = None, attachment_name: str = None, follow_up_delay: int = 0, follow_up_body: str = None, auto_reply_prompt: str = None, campaign_id: str = None, campaign_name: str = None) -> dict:
     """
     Sends a single email via Gmail API using OAuth 2.0 with optional PDF attachment and optional follow-up scheduling.
     """
@@ -100,7 +160,6 @@ async def send_email(to_email: str, subject: str, body: str, user_email: str, sk
         
         create_message = {'raw': encoded_message}
         
-        import asyncio
         send_result = await asyncio.to_thread(
             service.users().messages().send(userId="me", body=create_message).execute
         )
@@ -114,6 +173,7 @@ async def send_email(to_email: str, subject: str, body: str, user_email: str, sk
                 "body": body,
                 "type": "sent",
                 "campaign_id": campaign_id,
+                "campaign_name": campaign_name,
                 "gmail_id": send_result.get("id"),
                 "thread_id": send_result.get("threadId"),
                 "reply_received": False,
@@ -146,6 +206,9 @@ async def send_email(to_email: str, subject: str, body: str, user_email: str, sk
         err_str = str(e)
         if "invalid_grant" in err_str or "Authentication expired" in err_str or "RefreshError" in type(e).__name__:
             await mark_user_auth_expired(user_email, "Authentication expired. Please reconnect your Gmail account.")
+        elif "429" in err_str or "rateLimitExceeded" in err_str or "User-rate limit exceeded" in err_str:
+            cooldown_until = parse_google_retry_after(err_str)
+            await set_account_rate_limit(user_email, cooldown_until)
         print(f"[EmailService] Error sending email from {user_email}: {e}")
         return {"success": False, "error": str(e)}
 
@@ -200,6 +263,7 @@ async def send_bulk_emails(
     body: str,
     user_email: str,
     sender_emails: list[str] = None,
+    dispatch_mode: str = "all_accounts",
     attachment_data: bytes = None,
     attachment_name: str = None,
     follow_up_delay: int = 0,
@@ -209,37 +273,73 @@ async def send_bulk_emails(
     min_send_delay: float = None,
     max_send_delay: float = None,
     enable_human_pauses: bool = False,
-    campaign_id: str = None
+    campaign_id: str = None,
+    campaign_name: str = None
 ) -> dict:
     import uuid
-    import asyncio
-    import random
     if not campaign_id:
         campaign_id = str(uuid.uuid4())
+    from app.api.responses import clean_campaign_title
+    if campaign_name and campaign_name.strip():
+        effective_campaign_name = clean_campaign_title(campaign_name)
+    elif subject and subject.strip():
+        effective_campaign_name = clean_campaign_title(subject)
+    else:
+        effective_campaign_name = "Cold Outreach Campaign"
 
-    # Determine sender list and validate active accounts
+    # Pre-flight check on requested senders
     raw_senders = [s.strip() for s in sender_emails if s and s.strip()] if sender_emails else [user_email]
     if not raw_senders:
         raw_senders = [user_email]
 
-    # Check database for active sender credentials
-    valid_senders = []
-    if users_collection is not None:
-        for s in raw_senders:
-            u_doc = await users_collection.find_one({"email": s})
-            if u_doc and u_doc.get("auth_status") != "expired" and u_doc.get("access_token"):
-                valid_senders.append(s)
+    # Deduplicate while preserving user ordering
+    seen_senders = set()
+    deduped_senders = []
+    for s in raw_senders:
+        sl = s.lower()
+        if sl not in seen_senders:
+            seen_senders.add(sl)
+            deduped_senders.append(s)
 
-    senders = valid_senders if valid_senders else raw_senders
-    total_emails = len(list_of_emails)
+    healthy_senders = []
+    skipped_senders = {}
+    warnings = []
+
+    for s in deduped_senders:
+        is_healthy, status_str, mins_left = await is_account_healthy(s)
+        if is_healthy:
+            healthy_senders.append(s)
+        else:
+            reason = f"Google rate limit cooldown (~{mins_left}m remaining)" if status_str == "rate_limited" else f"account status: {status_str}"
+            skipped_senders[s] = reason
+            warnings.append(f"Account {s} is currently unavailable ({reason}).")
+
+    if not healthy_senders:
+        # All requested senders are cooling down or expired!
+        error_msg = f"None of the selected sender accounts are available to dispatch emails. {'; '.join(warnings)}"
+        print(f"[EmailService] [ERROR] {error_msg}")
+        return {
+            "campaign_id": campaign_id,
+            "total": len(list_of_emails),
+            "successful": 0,
+            "failed": len(list_of_emails),
+            "failed_emails": list_of_emails,
+            "senders_requested": deduped_senders,
+            "senders_used": [],
+            "distribution": {},
+            "failover_events": [],
+            "warnings": warnings,
+            "dispatch_mode": dispatch_mode,
+            "error": error_msg
+        }
+
+    senders = healthy_senders
+    total_leads = len(list_of_emails)
 
     # Determine desired custom delay between emails
     desired_delay = float(delay_seconds) if delay_seconds and float(delay_seconds) > 0 else 0.0
     if desired_delay == 0.0 and min_send_delay is not None and float(min_send_delay) > 0:
         desired_delay = float(min_send_delay)
-
-    print(f"[EmailService] [DISPATCH] Launching campaign {campaign_id} to {total_emails} leads across {len(senders)} sender(s): {senders}")
-    print(f"[EmailService] [CUSTOM DELAY] Email #1 sends initially (immediate). Desired delay between subsequent sends: {desired_delay}s")
 
     # Fetch lead data mapping for personalization (case-insensitive match)
     lead_map = {}
@@ -250,37 +350,76 @@ async def send_bulk_emails(
                 if "email" in lead_doc:
                     lead_map[lead_doc["email"].lower().strip()] = lead_doc
 
+    # Construct dispatch jobs based on dispatch_mode
+    # 1. "all_accounts": Every selected Gmail account will send to every lead in list_of_emails
+    # 2. "round_robin": Rotate senders across leads (1 email per lead)
+    # 3. "single": Send all emails from 1 sender
+    dispatch_jobs = []
+    if dispatch_mode == "all_accounts":
+        for recipient_email in list_of_emails:
+            for s in senders:
+                dispatch_jobs.append({
+                    "recipient": recipient_email,
+                    "sender": s,
+                    "is_all_accounts": True
+                })
+    elif dispatch_mode == "round_robin":
+        for idx, recipient_email in enumerate(list_of_emails):
+            primary_assigned = senders[idx % len(senders)]
+            dispatch_jobs.append({
+                "recipient": recipient_email,
+                "sender": primary_assigned,
+                "is_all_accounts": False
+            })
+    else:  # "single"
+        chosen_sender = senders[0] if senders else user_email
+        for recipient_email in list_of_emails:
+            dispatch_jobs.append({
+                "recipient": recipient_email,
+                "sender": chosen_sender,
+                "is_all_accounts": False
+            })
+
+    total_dispatches = len(dispatch_jobs)
+    print(f"[EmailService] [DISPATCH] Launching campaign '{effective_campaign_name}' ({campaign_id}) | Mode: {dispatch_mode}")
+    print(f"[EmailService] [DISPATCH] Total dispatches: {total_dispatches} ({total_leads} lead(s) across {len(senders)} account(s): {senders})")
+    print(f"[EmailService] [CUSTOM DELAY] Email #1 sends immediately. Delay between subsequent dispatches: {desired_delay}s")
+
     success_count = 0
     failed_emails = []
     error_messages = []
     actual_senders_used = set()
+    distribution = {}
+    failover_events = []
     temporary_inactive_senders = set()
 
-    for idx, recipient_email in enumerate(list_of_emails):
-        # 1. Email #1 sends initially. Subsequent emails wait the desired custom delay.
-        if idx > 0 and desired_delay > 0:
-            print(f"[EmailService] [DELAY] Waiting desired custom delay of {desired_delay}s before dispatching email #{idx+1}/{total_emails} to {recipient_email}...")
+    for job_idx, job in enumerate(dispatch_jobs):
+        recipient_email = job["recipient"]
+        target_sender = job["sender"]
+
+        # Wait custom delay between dispatches (after the very first email)
+        if job_idx > 0 and desired_delay > 0:
+            print(f"[EmailService] [DELAY] Waiting {desired_delay}s before dispatch #{job_idx+1}/{total_dispatches} (from {target_sender} to {recipient_email})...")
             await asyncio.sleep(desired_delay)
 
         lead_info = lead_map.get(recipient_email.lower().strip())
-
-        # Personalize subject, body, and follow-up body for this lead
         personalized_subject = format_personalized_text(subject, lead_info, recipient_email)
         personalized_body = format_personalized_text(body, lead_info, recipient_email)
         personalized_followup = format_personalized_text(follow_up_body, lead_info, recipient_email) if follow_up_body else None
 
-        # Determine rotation candidate list with failover
-        primary_assigned = senders[idx % len(senders)]
-        active_candidates = [s for s in senders if s not in temporary_inactive_senders]
-        if not active_candidates:
-            # If all are temporarily flagged, reset pool to try again
-            temporary_inactive_senders.clear()
-            active_candidates = senders
-
-        if primary_assigned in active_candidates:
-            candidate_list = [primary_assigned] + [s for s in active_candidates if s != primary_assigned]
+        if job.get("is_all_accounts"):
+            # In all_accounts mode, target_sender is the exact account intended for this dispatch
+            candidate_list = [target_sender]
         else:
-            candidate_list = active_candidates
+            # In round_robin/single mode, failover to other healthy accounts if target fails
+            active_candidates = [s for s in senders if s not in temporary_inactive_senders]
+            if not active_candidates:
+                temporary_inactive_senders.clear()
+                active_candidates = senders
+            if target_sender in active_candidates:
+                candidate_list = [target_sender] + [s for s in active_candidates if s != target_sender]
+            else:
+                candidate_list = active_candidates
 
         send_success = False
         last_err = None
@@ -297,37 +436,54 @@ async def send_bulk_emails(
                 follow_up_delay=follow_up_delay,
                 follow_up_body=personalized_followup,
                 auto_reply_prompt=auto_reply_prompt,
-                campaign_id=campaign_id
+                campaign_id=campaign_id,
+                campaign_name=effective_campaign_name
             )
 
             if result.get("success"):
                 send_success = True
                 sender_used = candidate_sender
                 actual_senders_used.add(candidate_sender)
+                distribution[candidate_sender] = distribution.get(candidate_sender, 0) + 1
+
+                if not job.get("is_all_accounts") and candidate_sender != target_sender:
+                    failover_events.append({
+                        "recipient": recipient_email,
+                        "assigned_sender": target_sender,
+                        "actual_sender": candidate_sender,
+                        "reason": last_err or "Primary sender failed"
+                    })
+                    print(f"[EmailService] [FAILOVER RECORDED] Lead {recipient_email} reassigned from {target_sender} to {candidate_sender}")
                 break
             else:
                 last_err = result.get("error", "Unknown error")
-                print(f"[EmailService] [FAILOVER] Account {candidate_sender} failed for {recipient_email}: {last_err}. Trying next available account...")
+                print(f"[EmailService] [FAILOVER] Account {candidate_sender} failed for {recipient_email}: {last_err}")
                 if "429" in str(last_err) or "rateLimitExceeded" in str(last_err) or "expired" in str(last_err).lower():
                     temporary_inactive_senders.add(candidate_sender)
 
         if send_success:
             success_count += 1
-            print(f"[EmailService] [SUCCESS] Sent to {recipient_email} via {sender_used} ({idx+1}/{total_emails})")
+            print(f"[EmailService] [SUCCESS] ({job_idx+1}/{total_dispatches}) Sent to {recipient_email} via {sender_used}")
         else:
-            failed_emails.append(recipient_email)
+            failed_emails.append(f"{target_sender} -> {recipient_email}")
             if last_err and last_err not in error_messages:
                 error_messages.append(last_err)
-            print(f"[EmailService] [FAIL] All available sender accounts failed sending to {recipient_email}: {last_err}")
+            print(f"[EmailService] [FAIL] Failed sending to {recipient_email} via {target_sender}: {last_err}")
 
     last_error = "; ".join(error_messages) if error_messages else None
 
     return {
         "campaign_id": campaign_id,
-        "total": total_emails,
+        "campaign_name": effective_campaign_name,
+        "total": total_dispatches,
         "successful": success_count,
         "failed": len(failed_emails),
         "failed_emails": failed_emails,
+        "senders_requested": deduped_senders,
         "senders_used": list(actual_senders_used) if actual_senders_used else senders,
+        "distribution": distribution,
+        "failover_events": failover_events,
+        "warnings": warnings,
+        "dispatch_mode": dispatch_mode,
         "error": last_error
     }

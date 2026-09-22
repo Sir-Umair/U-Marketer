@@ -12,18 +12,22 @@ interface LeadStatus {
   subject?: string;
   body?: string;
   thread_id?: string;
+  sender_email?: string;
   follow_up_delay?: number;
   follow_up_sent?: boolean;
 }
 
 interface Campaign {
   id: string;
+  name?: string;
   subject: string;
   timestamp: string;
   total_leads?: number;
   emails_sent?: number;
   replies_count?: number;
   reply_rate?: number;
+  senders?: string[];
+  sender_accounts_count?: number;
   leads: LeadStatus[];
 }
 
@@ -40,6 +44,9 @@ function CampaignDashboardContent() {
   const [previewLead, setPreviewLead] = useState<LeadStatus | null>(null);
   const [showCampaignPicker, setShowCampaignPicker] = useState(false);
   const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
+  const [renamingCampaign, setRenamingCampaign] = useState<{ id: string, name: string } | null>(null);
+  const [newNameInput, setNewNameInput] = useState('');
+  const [isSubmittingRename, setIsSubmittingRename] = useState(false);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
@@ -97,6 +104,40 @@ function CampaignDashboardContent() {
     }
   }
 
+  function openRenameModal(e: React.MouseEvent, id: string, currentName: string) {
+    e.stopPropagation();
+    setRenamingCampaign({ id, name: currentName });
+    setNewNameInput(currentName);
+  }
+
+  async function handleConfirmRename() {
+    if (!renamingCampaign) return;
+    const trimmed = newNameInput.trim();
+    if (!trimmed) {
+      alert('Campaign name cannot be empty');
+      return;
+    }
+
+    try {
+      setIsSubmittingRename(true);
+      const res = await api.renameCampaign(renamingCampaign.id, trimmed);
+      const updatedName = res.name || trimmed;
+
+      setCampaigns(prev => prev.map(c => {
+        if (c.id === renamingCampaign.id) {
+          return { ...c, name: updatedName, subject: updatedName };
+        }
+        return c;
+      }));
+
+      setRenamingCampaign(null);
+    } catch (err: any) {
+      alert('Failed to rename campaign: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSubmittingRename(false);
+    }
+  }
+
   // Active campaign when single campaign is selected
   const activeCampaign = useMemo(() => {
     if (selectedCampaignId === 'ALL') return null;
@@ -116,7 +157,7 @@ function CampaignDashboardContent() {
         emailsSent: totalLeads,
         replies: replied,
         replyRate: rate,
-        title: activeCampaign.subject || 'Untitled Campaign',
+        title: activeCampaign.name || activeCampaign.subject || 'Untitled Campaign',
         date: activeCampaign.timestamp ? new Date(activeCampaign.timestamp).toLocaleDateString() : 'Recent'
       };
     }
@@ -156,7 +197,7 @@ function CampaignDashboardContent() {
   }, [activeCampaign, leadFilter, searchQuery]);
 
   return (
-    <div style={{ maxWidth: '1280px', margin: '0 auto', paddingBottom: '3rem' }}>
+    <div style={{ width: '100%', maxWidth: '100%', margin: '0 auto', paddingBottom: '3rem', minWidth: 0, boxSizing: 'border-box' }}>
       
       {/* Top Header & Strategic Action Bar */}
       <div style={{ 
@@ -165,9 +206,11 @@ function CampaignDashboardContent() {
         alignItems: 'flex-start', 
         marginBottom: '1.75rem', 
         flexWrap: 'wrap', 
-        gap: '1rem' 
+        gap: '1.25rem',
+        width: '100%',
+        maxWidth: '100%'
       }}>
-        <div>
+        <div style={{ flex: '1 1 320px', minWidth: 0, maxWidth: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
             <span style={{ 
               fontSize: '0.75rem', 
@@ -201,16 +244,20 @@ function CampaignDashboardContent() {
               padding: '0.2rem 0.5rem',
               marginLeft: '-0.5rem',
               borderRadius: '8px',
+              maxWidth: '100%',
               transition: 'background 0.15s ease'
             }}
             title="Click to switch campaign record"
           >
             <h1 style={{ 
-              fontSize: 'clamp(1.5rem, 4vw, 2.25rem)', 
+              fontSize: 'clamp(1.35rem, 3.5vw, 2.15rem)', 
               fontWeight: 800, 
-              lineHeight: 1.2, 
+              lineHeight: 1.25, 
               margin: 0,
-              color: 'var(--foreground)'
+              color: 'var(--foreground)',
+              wordBreak: 'break-word',
+              overflowWrap: 'break-word',
+              maxWidth: '100%'
             }}>
               {metrics.title}
             </h1>
@@ -225,13 +272,14 @@ function CampaignDashboardContent() {
               border: '1px solid rgba(99, 102, 241, 0.25)',
               padding: '0.35rem 0.75rem',
               borderRadius: '9999px',
-              boxShadow: '0 2px 4px rgba(99, 102, 241, 0.08)'
+              boxShadow: '0 2px 4px rgba(99, 102, 241, 0.08)',
+              whiteSpace: 'nowrap'
             }}>
               <span>{activeCampaign ? 'Switch Campaign' : 'Select Campaign'}</span>
               <span style={{ fontSize: '0.7rem' }}>▼</span>
             </span>
           </div>
-          <p style={{ color: 'var(--muted-foreground)', fontSize: '0.95rem', margin: 0 }}>
+          <p style={{ color: 'var(--muted-foreground)', fontSize: '0.95rem', margin: 0, wordBreak: 'break-word' }}>
             {activeCampaign 
               ? `Isolated analytics, delivery audit, and client engagement for this specific campaign.`
               : `High-level record management and conversion analytics across all active campaigns. Click heading to isolate any campaign.`}
@@ -239,18 +287,28 @@ function CampaignDashboardContent() {
         </div>
 
         {/* Global Action Buttons */}
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
           {activeCampaign && (
-            <button
-              className="btn btn-outline"
-              onClick={() => {
-                setSelectedCampaignId('ALL');
-                setExpandedCampaignId(null);
-              }}
-              style={{ padding: '0.65rem 1.15rem', borderRadius: '10px', fontSize: '0.875rem' }}
-            >
-              ✕ View All Campaigns
-            </button>
+            <>
+              <button
+                className="btn btn-outline"
+                onClick={(e) => openRenameModal(e, activeCampaign.id, metrics.title)}
+                style={{ padding: '0.65rem 1.15rem', borderRadius: '10px', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.4rem', borderColor: '#cbd5e1' }}
+                title="Rename this campaign"
+              >
+                ✏️ Rename Campaign
+              </button>
+              <button
+                className="btn btn-outline"
+                onClick={() => {
+                  setSelectedCampaignId('ALL');
+                  setExpandedCampaignId(null);
+                }}
+                style={{ padding: '0.65rem 1.15rem', borderRadius: '10px', fontSize: '0.875rem' }}
+              >
+                ✕ View All Campaigns
+              </button>
+            </>
           )}
           <button 
             className="btn" 
@@ -283,10 +341,13 @@ function CampaignDashboardContent() {
           display: 'flex',
           gap: '0.5rem',
           overflowX: 'auto',
+          width: '100%',
+          maxWidth: '100%',
           paddingBottom: '0.75rem',
           marginBottom: '1.5rem',
           WebkitOverflowScrolling: 'touch',
-          scrollbarWidth: 'thin'
+          scrollbarWidth: 'thin',
+          boxSizing: 'border-box'
         }}>
           <button
             onClick={() => {
@@ -341,7 +402,7 @@ function CampaignDashboardContent() {
                   flexShrink: 0
                 }}
               >
-                <span>✉️ {c.subject.length > 28 ? c.subject.substring(0, 28) + '...' : c.subject}</span>
+                <span>✉️ {(c.name || c.subject).length > 28 ? (c.name || c.subject).substring(0, 28) + '...' : (c.name || c.subject)}</span>
                 <span style={{ 
                   fontSize: '0.7rem', 
                   padding: '0.15rem 0.45rem', 
@@ -349,7 +410,7 @@ function CampaignDashboardContent() {
                   background: isSelected ? 'var(--primary)' : 'var(--muted)',
                   color: isSelected ? '#ffffff' : 'var(--muted-foreground)'
                 }}>
-                  {repliesCount}/{leadsCount} replies
+                  {leadsCount} lead{leadsCount !== 1 ? 's' : ''} • {repliesCount} repl{repliesCount === 1 ? 'y' : 'ies'}
                 </span>
               </button>
             );
@@ -360,9 +421,11 @@ function CampaignDashboardContent() {
       {/* Analytics Cards Grid (Dynamically Calculated for Selected Campaign or Portfolio) */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-        gap: '1.25rem',
-        marginBottom: '2rem'
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))',
+        gap: '1rem',
+        marginBottom: '2rem',
+        width: '100%',
+        maxWidth: '100%'
       }}>
         {/* Metric 1 */}
         <div className="card" style={{ padding: '1.25rem 1.5rem', position: 'relative', overflow: 'hidden' }}>
@@ -463,16 +526,18 @@ function CampaignDashboardContent() {
 
       {/* VIEW A: SINGLE CAMPAIGN DRILLDOWN VIEW */}
       {!loading && activeCampaign && (
-        <div className="card" style={{ padding: '1.5rem' }}>
+        <div className="card" style={{ padding: '1.5rem', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
           <div style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
             alignItems: 'center', 
             marginBottom: '1.25rem', 
             flexWrap: 'wrap', 
-            gap: '1rem' 
+            gap: '1rem',
+            width: '100%',
+            maxWidth: '100%'
           }}>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
                 Target Leads in this Campaign
               </h2>
@@ -482,7 +547,7 @@ function CampaignDashboardContent() {
             </div>
 
             {/* Filter Tabs & Search */}
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', maxWidth: '100%' }}>
               <input
                 type="text"
                 placeholder="Search lead email..."
@@ -495,7 +560,8 @@ function CampaignDashboardContent() {
                   background: 'var(--card)',
                   fontSize: '0.825rem',
                   outline: 'none',
-                  minWidth: '180px'
+                  minWidth: '160px',
+                  maxWidth: '100%'
                 }}
               />
               <div style={{ display: 'flex', borderRadius: '8px', border: '1px solid var(--border)', overflow: 'hidden' }}>
@@ -523,8 +589,8 @@ function CampaignDashboardContent() {
           </div>
 
           {/* Leads Table */}
-          <div className="table-container" style={{ borderRadius: '10px', overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+          <div className="table-container" style={{ borderRadius: '10px', overflowX: 'auto', width: '100%', maxWidth: '100%' }}>
+            <table style={{ width: '100%', minWidth: '650px', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
                 <tr style={{ background: 'var(--muted)', textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                   <th style={{ padding: '0.85rem 1rem' }}>Contact / Lead</th>
@@ -550,15 +616,20 @@ function CampaignDashboardContent() {
                         background: lead.replied ? 'rgba(16, 185, 129, 0.04)' : 'transparent'
                       }}
                     >
-                      <td style={{ padding: '0.85rem 1rem' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--foreground)' }}>{lead.email}</div>
+                      <td style={{ padding: '0.85rem 1rem', maxWidth: '240px' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--foreground)', wordBreak: 'break-word' }}>{lead.email}</div>
+                        {lead.sender_email && (
+                          <div style={{ fontSize: '0.725rem', color: 'var(--primary)', marginTop: '0.15rem', fontWeight: 500 }}>
+                            via {lead.sender_email}
+                          </div>
+                        )}
                         {lead.subject && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.2rem' }}>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.2rem', wordBreak: 'break-word' }}>
                             Subject: {lead.subject}
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '0.85rem 1rem' }}>
+                      <td style={{ padding: '0.85rem 1rem', whiteSpace: 'nowrap' }}>
                         {lead.replied ? (
                           <span style={{ 
                             background: '#dcfce7', 
@@ -583,13 +654,13 @@ function CampaignDashboardContent() {
                           </span>
                         )}
                       </td>
-                      <td style={{ padding: '0.85rem 1rem', color: 'var(--muted-foreground)', fontSize: '0.8rem' }}>
+                      <td style={{ padding: '0.85rem 1rem', color: 'var(--muted-foreground)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
                         {lead.sent_at ? new Date(lead.sent_at).toLocaleString() : 'Delivered'}
                       </td>
-                      <td style={{ padding: '0.85rem 1rem' }}>
+                      <td style={{ padding: '0.85rem 1rem', maxWidth: '300px' }}>
                         {lead.response ? (
                           <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
                               <span style={{ 
                                 background: '#dbeafe', 
                                 color: '#1e40af', 
@@ -607,10 +678,12 @@ function CampaignDashboardContent() {
                             <div style={{ 
                               fontSize: '0.8rem', 
                               color: 'var(--foreground)', 
-                              maxWidth: '320px', 
-                              whiteSpace: 'nowrap', 
-                              overflow: 'hidden', 
-                              textOverflow: 'ellipsis' 
+                              lineHeight: 1.4,
+                              wordBreak: 'break-word',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden'
                             }}>
                               &ldquo;{(lead.response.message || lead.response.snippet || 'Client responded').replace(/\r?\n/g, ' ').trim()}&rdquo;
                             </div>
@@ -687,6 +760,9 @@ function CampaignDashboardContent() {
                 style={{ 
                   padding: 0, 
                   overflow: 'hidden',
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box',
                   border: isExpanded ? '2px solid var(--primary)' : '1px solid var(--border)',
                   boxShadow: isExpanded ? '0 8px 24px rgba(99, 102, 241, 0.12)' : 'var(--shadow-sm)',
                   transition: 'all 0.2s ease'
@@ -702,115 +778,168 @@ function CampaignDashboardContent() {
                     alignItems: 'center', 
                     flexWrap: 'wrap', 
                     gap: '1rem',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    width: '100%',
+                    maxWidth: '100%',
+                    boxSizing: 'border-box',
+                    minWidth: 0
                   }}
                   onClick={() => setExpandedCampaignId(isExpanded ? null : campaign.id)}
                 >
-                  <div style={{ flex: '1 1 280px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 240px', minWidth: 0, maxWidth: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
                       <span style={{ 
                         background: 'var(--primary)', 
                         color: '#ffffff', 
-                        padding: '0.2rem 0.55rem', 
+                        padding: '0.2rem 0.6rem', 
                         borderRadius: '6px', 
                         fontSize: '0.7rem', 
+                        fontWeight: 700,
+                        letterSpacing: '0.04em',
+                        flexShrink: 0
+                      }}>
+                        📦 CAMPAIGN WRAPPER
+                      </span>
+                      <span style={{ 
+                        background: 'rgba(99, 102, 241, 0.12)', 
+                        color: 'var(--primary)', 
+                        padding: '0.2rem 0.55rem', 
+                        borderRadius: '6px', 
+                        fontSize: '0.725rem', 
                         fontWeight: 700 
                       }}>
-                        CAMPAIGN
+                        👥 {leadsCount} Target Lead{leadsCount !== 1 ? 's' : ''} Wrapped
                       </span>
+                      {campaign.senders && campaign.senders.length > 0 && (
+                        <span style={{ 
+                          background: '#f1f5f9', 
+                          color: '#475569', 
+                          padding: '0.2rem 0.55rem', 
+                          borderRadius: '6px', 
+                          fontSize: '0.725rem', 
+                          fontWeight: 600 
+                        }} title={`Sender accounts used: ${campaign.senders.join(', ')}`}>
+                          📬 {campaign.senders.length} sender(s)
+                        </span>
+                      )}
                       <span style={{ fontSize: '0.8rem', color: 'var(--muted-foreground)' }}>
-                        {campaign.timestamp ? new Date(campaign.timestamp).toLocaleDateString() : 'Active'}
-                      </span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)' }}>
-                        • {leadsCount} targets
+                        • {campaign.timestamp ? new Date(campaign.timestamp).toLocaleDateString() : 'Active'}
                       </span>
                     </div>
                     <h3 style={{ 
                       margin: 0, 
-                      fontSize: '1.15rem', 
+                      fontSize: '1.2rem', 
                       fontWeight: 700, 
-                      color: 'var(--foreground)'
+                      color: 'var(--foreground)',
+                      wordBreak: 'break-word',
+                      overflowWrap: 'break-word'
                     }}>
-                      {campaign.subject}
+                      {campaign.name || campaign.subject}
                     </h3>
                   </div>
 
                   {/* Right Side Stats & Actions */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
-                    {/* Reply Rate Metric */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: rate > 15 ? '#10b981' : '#6366f1' }}>
-                        {rate}%
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', maxWidth: '100%', minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', flexShrink: 0 }}>
+                      {/* Reply Rate Metric */}
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: rate > 15 ? '#10b981' : '#6366f1' }}>
+                          {rate}%
+                        </div>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--muted-foreground)' }}>
+                          REPLY RATE
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--muted-foreground)' }}>
-                        REPLY RATE
+
+                      {/* Targets Metric */}
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--foreground)' }}>
+                          {repliedCount} / {leadsCount}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--muted-foreground)' }}>
+                          REPLIES / LEADS
+                        </div>
                       </div>
                     </div>
 
-                    {/* Targets Metric */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--foreground)' }}>
-                        {repliedCount} / {leadsCount}
-                      </div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--muted-foreground)' }}>
-                        REPLIES / LEADS
-                      </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      {/* Button to Drill Down into this Single Campaign */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedCampaignId(campaign.id);
+                          setExpandedCampaignId(campaign.id);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          borderRadius: '8px',
+                          background: 'rgba(99, 102, 241, 0.1)',
+                          color: 'var(--primary)',
+                          border: '1px solid rgba(99, 102, 241, 0.25)',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        📊 View Analytics
+                      </button>
+
+                      {/* Rename Campaign */}
+                      <button
+                        onClick={(e) => openRenameModal(e, campaign.id, campaign.name || campaign.subject || 'Untitled Campaign')}
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          borderRadius: '8px',
+                          background: 'white',
+                          color: '#475569',
+                          border: '1px solid #cbd5e1',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                        title="Rename this campaign"
+                      >
+                        ✏️ Rename
+                      </button>
+
+                      {/* Delete Campaign */}
+                      <button
+                        onClick={(e) => handleDeleteCampaign(e, campaign.id)}
+                        style={{
+                          padding: '0.5rem 0.75rem',
+                          borderRadius: '8px',
+                          background: 'transparent',
+                          color: '#ef4444',
+                          border: '1px solid #fee2e2',
+                          fontSize: '0.8rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        Delete
+                      </button>
+
+                      {/* Accordion Arrow */}
+                      <span style={{ 
+                        fontSize: '1rem', 
+                        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', 
+                        transition: 'transform 0.2s ease',
+                        color: 'var(--muted-foreground)',
+                        paddingLeft: '0.25rem'
+                      }}>
+                        ▼
+                      </span>
                     </div>
-
-                    {/* Button to Drill Down into this Single Campaign */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedCampaignId(campaign.id);
-                        setExpandedCampaignId(campaign.id);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      style={{
-                        padding: '0.5rem 1rem',
-                        borderRadius: '8px',
-                        background: 'rgba(99, 102, 241, 0.1)',
-                        color: 'var(--primary)',
-                        border: '1px solid rgba(99, 102, 241, 0.25)',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      📊 View Analytics
-                    </button>
-
-                    {/* Delete Campaign */}
-                    <button
-                      onClick={(e) => handleDeleteCampaign(e, campaign.id)}
-                      style={{
-                        padding: '0.5rem 0.75rem',
-                        borderRadius: '8px',
-                        background: 'transparent',
-                        color: '#ef4444',
-                        border: '1px solid #fee2e2',
-                        fontSize: '0.8rem',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Delete
-                    </button>
-
-                    {/* Accordion Arrow */}
-                    <span style={{ 
-                      fontSize: '1rem', 
-                      transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)', 
-                      transition: 'transform 0.2s ease',
-                      color: 'var(--muted-foreground)'
-                    }}>
-                      ▼
-                    </span>
                   </div>
                 </div>
 
                 {/* Inline Expanded Leads List */}
                 {isExpanded && (
-                  <div style={{ borderTop: '1px solid var(--border)', padding: '1.25rem', background: 'var(--background)' }}>
+                  <div style={{ borderTop: '1px solid var(--border)', padding: '1.25rem', background: 'var(--background)', width: '100%', boxSizing: 'border-box' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <strong style={{ fontSize: '0.875rem' }}>
                         Leads & Deliveries ({campaign.leads.length})
@@ -826,22 +955,30 @@ function CampaignDashboardContent() {
                       </button>
                     </div>
 
-                    <div className="table-container" style={{ background: 'var(--card)', borderRadius: '8px' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem' }}>
+                    <div className="table-container" style={{ background: 'var(--card)', borderRadius: '8px', width: '100%', maxWidth: '100%', overflowX: 'auto', boxSizing: 'border-box' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.825rem', minWidth: '540px' }}>
                         <thead>
                           <tr style={{ background: 'var(--muted)', textAlign: 'left' }}>
-                            <th style={{ padding: '0.75rem 1rem' }}>Recipient</th>
-                            <th style={{ padding: '0.75rem 1rem' }}>Status</th>
-                            <th style={{ padding: '0.75rem 1rem' }}>Response Message</th>
+                            <th style={{ padding: '0.75rem 1rem', width: '28%' }}>Recipient</th>
+                            <th style={{ padding: '0.75rem 1rem', width: '22%' }}>Sender Account</th>
+                            <th style={{ padding: '0.75rem 1rem', width: '15%' }}>Status</th>
+                            <th style={{ padding: '0.75rem 1rem', width: '35%' }}>Response Message</th>
                           </tr>
                         </thead>
                         <tbody>
                           {campaign.leads.map((lead, idx) => (
                             <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
-                              <td style={{ padding: '0.75rem 1rem', fontWeight: 500 }}>
-                                {lead.email}
+                              <td style={{ padding: '0.75rem 1rem', fontWeight: 500, wordBreak: 'break-word' }}>
+                                <div>{lead.email}</div>
                               </td>
-                              <td style={{ padding: '0.75rem 1rem' }}>
+                              <td style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--muted-foreground)', wordBreak: 'break-word' }}>
+                                {lead.sender_email ? (
+                                  <span style={{ background: 'rgba(99, 102, 241, 0.08)', color: 'var(--primary)', padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 600 }}>
+                                    {lead.sender_email}
+                                  </span>
+                                ) : 'Default'}
+                              </td>
+                              <td style={{ padding: '0.75rem 1rem', whiteSpace: 'nowrap' }}>
                                 {lead.replied ? (
                                   <span style={{ background: '#dcfce7', color: '#166534', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 700 }}>
                                     ✓ REPLIED
@@ -852,7 +989,7 @@ function CampaignDashboardContent() {
                                   </span>
                                 )}
                               </td>
-                              <td style={{ padding: '0.75rem 1rem', color: 'var(--muted-foreground)' }}>
+                              <td style={{ padding: '0.75rem 1rem', color: 'var(--muted-foreground)', wordBreak: 'break-word' }}>
                                 {lead.response ? (
                                   <div>
                                     <span style={{ 
@@ -915,6 +1052,7 @@ function CampaignDashboardContent() {
             style={{
               maxWidth: '620px',
               width: '100%',
+              boxSizing: 'border-box',
               maxHeight: '85vh',
               overflowY: 'auto',
               padding: '1.5rem',
@@ -946,6 +1084,7 @@ function CampaignDashboardContent() {
               onChange={(e) => setCampaignSearchQuery(e.target.value)}
               style={{
                 width: '100%',
+                boxSizing: 'border-box',
                 padding: '0.75rem 1rem',
                 borderRadius: '8px',
                 border: '1px solid var(--border)',
@@ -1015,7 +1154,7 @@ function CampaignDashboardContent() {
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                        <strong style={{ color: 'var(--foreground)', fontSize: '0.95rem' }}>
+                        <strong style={{ color: 'var(--foreground)', fontSize: '0.95rem', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                           {c.subject}
                         </strong>
                         <span style={{
@@ -1071,6 +1210,7 @@ function CampaignDashboardContent() {
             style={{
               maxWidth: '680px',
               width: '100%',
+              boxSizing: 'border-box',
               maxHeight: '85vh',
               overflowY: 'auto',
               padding: '1.75rem',
@@ -1091,7 +1231,7 @@ function CampaignDashboardContent() {
                 }}>
                   Lead Delivery Audit
                 </span>
-                <h3 style={{ margin: '0.2rem 0 0 0', fontSize: '1.2rem', fontWeight: 700 }}>
+                <h3 style={{ margin: '0.2rem 0 0 0', fontSize: '1.2rem', fontWeight: 700, wordBreak: 'break-word' }}>
                   {previewLead.email}
                 </h3>
               </div>
@@ -1205,6 +1345,100 @@ function CampaignDashboardContent() {
                 style={{ padding: '0.5rem 1.25rem', fontSize: '0.85rem' }}
               >
                 Close Audit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Campaign Modal */}
+      {renamingCampaign && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '1rem',
+          backdropFilter: 'blur(3px)'
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '14px',
+            padding: '1.5rem',
+            width: '100%',
+            maxWidth: '460px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            border: '1px solid #e2e8f0'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '1.25rem' }}>✏️</span>
+              <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#1e293b' }}>
+                Rename Campaign
+              </h3>
+            </div>
+            <p style={{ fontSize: '0.85rem', color: '#64748b', margin: '0 0 1rem 0' }}>
+              Set a custom, memorable title for this campaign. This updates across all analytics, reply tracking, and reports.
+            </p>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#475569', marginBottom: '0.35rem' }}>
+                Campaign Name
+              </label>
+              <input
+                autoFocus
+                className="input"
+                value={newNameInput}
+                onChange={e => setNewNameInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleConfirmRename();
+                  if (e.key === 'Escape') setRenamingCampaign(null);
+                }}
+                placeholder="e.g. Q1 Founder Outreach, Growth Partnership..."
+                style={{ width: '100%', fontSize: '0.95rem', padding: '0.65rem 0.85rem' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.65rem' }}>
+              <button
+                type="button"
+                onClick={() => setRenamingCampaign(null)}
+                disabled={isSubmittingRename}
+                style={{
+                  padding: '0.55rem 1rem',
+                  borderRadius: '8px',
+                  background: '#f1f5f9',
+                  color: '#475569',
+                  border: '1px solid #cbd5e1',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRename}
+                disabled={isSubmittingRename || !newNameInput.trim()}
+                style={{
+                  padding: '0.55rem 1.25rem',
+                  borderRadius: '8px',
+                  background: 'var(--primary)',
+                  color: 'white',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  cursor: isSubmittingRename || !newNameInput.trim() ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 2px 4px rgba(99, 102, 241, 0.3)'
+                }}
+              >
+                {isSubmittingRename ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>

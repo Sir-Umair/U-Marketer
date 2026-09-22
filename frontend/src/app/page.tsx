@@ -325,7 +325,7 @@ export default function Dashboard() {
                         >
                           <td style={{ padding: '1rem' }}>
                             <div style={{ fontWeight: 600, color: 'var(--foreground)' }}>
-                              {camp.subject}
+                              {camp.name || camp.subject || 'Untitled Campaign'}
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.2rem' }}>
                               ID: {camp.id.length > 20 ? camp.id.substring(0, 20) + '...' : camp.id}
