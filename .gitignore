@@ -8,3 +8,5 @@ credentials.json
 token.json
 *.log
 scratch/
+hf_space/
+

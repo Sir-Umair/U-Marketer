@@ -1,7 +1,8 @@
+from __future__ import annotations
 import os
 import json
 import re
-from typing import TypedDict, List, Annotated, Dict, Optional
+from typing import TypedDict, List, Annotated, Dict, Optional, Any, Union
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from app.config import settings
@@ -258,9 +259,13 @@ Return ONLY a valid JSON object:
             "Politely confirm unsubscriptions immediately with no further follow-up"
         ]
 
-    async def generate_campaign_name(self, prompt: str = None, subject: str = None, body: str = None) -> Dict[str, Any]:
+    async def generate_campaign_name(
+        self,
+        prompt: Optional[str] = None,
+        subject: Optional[str] = None,
+        body: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Generates a professional, concise marketing campaign title (2-5 words) and alternatives."""
-        import re
         from datetime import datetime
 
         context_parts = []

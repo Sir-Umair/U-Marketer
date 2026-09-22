@@ -1,4 +1,6 @@
+from __future__ import annotations
 import re
+from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from app.db import email_logs_collection, users_collection, leads_collection
@@ -49,7 +51,7 @@ def clean_subject(subject: str) -> str:
     return s.strip()
 
 
-def clean_campaign_title(title_or_subject: str) -> str:
+def clean_campaign_title(title_or_subject: Optional[str] = None) -> str:
     """
     Returns a clean, human-readable user-facing campaign title:
     - Strips email prefixes (Re:, Fwd:, Aw:, etc.)
