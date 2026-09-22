@@ -57,7 +57,9 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8000",
-        "http://127.0.0.1:8000"
+        "http://127.0.0.1:8000",
+        "https://u-marketer01.vercel.app",
+        "https://u-marketer.vercel.app"
     ],
     allow_origin_regex=".*",
     allow_credentials=True,

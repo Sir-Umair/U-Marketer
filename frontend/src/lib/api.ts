@@ -37,8 +37,14 @@ async function safeFetch(path: string, options: RequestInit = {}): Promise<Respo
 
 export const api = {
   // Auth
-  async login() {
-    const response = await safeFetch('/api/auth/login');
+  async login(redirectUri?: string) {
+    const params = new URLSearchParams();
+    if (redirectUri) params.set('redirect_uri', redirectUri);
+    if (typeof window !== 'undefined' && window.location.origin) {
+      params.set('frontend_url', window.location.origin);
+    }
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const response = await safeFetch(`/api/auth/login${query}`);
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to initiate login');

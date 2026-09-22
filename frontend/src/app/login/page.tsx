@@ -41,12 +41,6 @@ function LoginContent() {
     setLoading(true);
     setError('');
 
-    // Redirect instantly if url is cached
-    if (cachedUrl) {
-      window.location.href = cachedUrl;
-      return;
-    }
-
     try {
       const data = await api.login();
       if (data.auth_url) {
@@ -55,7 +49,7 @@ function LoginContent() {
         throw new Error('Could not get Google authorization URL');
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to initiate Google login. Please ensure the backend is running.');
+      setError(err.message || 'Failed to initiate Google login. Use Quick Workspace Login below.');
       setLoading(false);
     }
   };
@@ -175,6 +169,18 @@ function LoginContent() {
             )}
           </button>
 
+          {/* Divider */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            margin: '0.25rem 0'
+          }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>or</span>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+          </div>
+
           {/* Quick Workspace Login */}
           <button
             onClick={handleDirectLogin}
@@ -186,27 +192,27 @@ function LoginContent() {
               alignItems: 'center',
               gap: '0.6rem',
               height: '46px',
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#e2e8f0',
-              fontWeight: '500',
+              background: 'rgba(59, 130, 246, 0.15)',
+              color: '#93c5fd',
+              fontWeight: '600',
               borderRadius: '8px',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
+              border: '1px solid rgba(59, 130, 246, 0.35)',
               cursor: 'pointer',
-              fontSize: '0.9rem',
-              transition: 'background 0.2s ease'
+              fontSize: '0.925rem',
+              transition: 'all 0.2s ease'
             }}
           >
             {directLoading ? (
               <div style={{
                 width: '18px',
                 height: '18px',
-                border: '2px solid rgba(255,255,255,0.2)',
-                borderTopColor: '#fff',
+                border: '2px solid rgba(147, 197, 253, 0.3)',
+                borderTopColor: '#93c5fd',
                 borderRadius: '50%',
                 animation: 'spin 0.6s linear infinite'
               }}></div>
             ) : (
-              <>⚡ Quick Workspace Login</>
+              <>⚡ Quick Workspace Login (Instant Access)</>
             )}
           </button>
         </div>

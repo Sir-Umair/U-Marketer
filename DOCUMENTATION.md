@@ -235,8 +235,11 @@ GOOGLE_CREDENTIALS_FILE=credentials.json
 5. Go to **APIs & Services > Credentials**:
    - Click **Create Credentials > OAuth client ID**.
    - Application type: **Web application**.
-   - Authorized redirect URIs: `http://localhost:8000/api/auth/callback`.
-   - Copy Client ID & Client Secret into `.env`.
+   - Authorized redirect URIs:
+     - Local: `http://localhost:8000/api/auth/callback`
+     - Production Backend: `https://u-marketer.vercel.app/api/auth/callback`
+     - Production Frontend: `https://u-marketer01.vercel.app/auth/callback`
+   - Copy Client ID & Client Secret into `.env` (and Vercel environment variables).
 
 ---
 

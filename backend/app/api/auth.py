@@ -189,17 +189,95 @@ async def perform_token_exchange(code: str, redirect_uri: str) -> Dict[str, Any]
         return data
 
 
+@router.post("/direct-login")
+async def direct_login(request: Request):
+    """
+    Directly authenticates the primary workspace user without requiring Google OAuth redirect.
+    Essential for headless cloud deployments and instant access to the dashboard.
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    target_email = (body.get("email") or settings.email_user or "umairsahib242@gmail.com").strip()
+
+    user = None
+    if users_collection is not None:
+        user = await users_collection.find_one({"email": target_email})
+        if not user:
+            # Fallback to any existing connected account or user
+            user = await users_collection.find_one()
+
+    if not user:
+        # Create default workspace user if database is fresh
+        user = {
+            "email": target_email,
+            "name": "Sir Umair",
+            "last_login": datetime.utcnow().isoformat(),
+            "auth_status": "active",
+            "plan_tier": "starter",
+            "credits_balance": 1000,
+            "max_connected_accounts": 2,
+        }
+        if users_collection is not None:
+            await users_collection.insert_one(user)
+    else:
+        # Update last_login
+        if users_collection is not None:
+            await users_collection.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"last_login": datetime.utcnow().isoformat()}}
+            )
+
+    token = jwt.encode({"sub": user["email"]}, settings.secret_key, algorithm="HS256")
+    return {
+        "success": True,
+        "token": token,
+        "email": user["email"],
+        "name": user.get("name", "Sir Umair")
+    }
+
+
 @router.get("/login")
 async def login(request: Request):
     if not settings.google_client_id:
         raise HTTPException(status_code=500, detail="Google Client ID not configured")
 
-    req_redirect = request.query_params.get("redirect_uri")
-    redirect_uri = (req_redirect or settings.redirect_uri).strip()
+    # 1. Detect target frontend URL
+    req_frontend = request.query_params.get("frontend_url")
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    detected_frontend = None
+    if req_frontend and req_frontend.strip():
+        detected_frontend = req_frontend.strip().rstrip("/")
+    elif origin:
+        try:
+            parsed = urllib.parse.urlparse(origin)
+            if parsed.scheme and parsed.netloc:
+                detected_frontend = f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            pass
 
-    # Encode redirect_uri into state so token exchange always receives an identical URI
+    frontend_url = detected_frontend or settings.frontend_url or "https://u-marketer01.vercel.app"
+
+    # 2. Resolve redirect_uri
+    req_redirect = request.query_params.get("redirect_uri")
+    if req_redirect and req_redirect.strip():
+        redirect_uri = req_redirect.strip()
+    else:
+        host = request.headers.get("host", "")
+        if "vercel.app" in host:
+            redirect_uri = f"https://{host}/api/auth/callback"
+        elif settings.redirect_uri:
+            redirect_uri = settings.redirect_uri.strip()
+        else:
+            redirect_uri = "http://localhost:8000/api/auth/callback"
+
+    # Encode redirect_uri and frontend_url into state so token exchange and callback always know where to return
     state_payload = {
         "redirect_uri": redirect_uri,
+        "frontend_url": frontend_url,
         "ts": int(time.time())
     }
     state = base64.urlsafe_b64encode(json.dumps(state_payload).encode()).decode()
@@ -216,7 +294,11 @@ async def login(request: Request):
     }
 
     auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
-    return {"auth_url": auth_url}
+    return {
+        "auth_url": auth_url,
+        "redirect_uri": redirect_uri,
+        "frontend_url": frontend_url
+    }
 
 
 @router.post("/exchange")
@@ -256,6 +338,17 @@ async def callback(request: Request, code: str, state: str = None):
     )
     redirect_uri = resolve_redirect_uri(state, request.query_params.get("redirect_uri"))
 
+    # Extract target frontend_url from state so we redirect back to the exact initiating frontend
+    target_frontend = settings.frontend_url or "https://u-marketer01.vercel.app"
+    if state:
+        try:
+            padded = state + "=" * (-len(state) % 4)
+            decoded = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+            if isinstance(decoded, dict) and decoded.get("frontend_url"):
+                target_frontend = str(decoded["frontend_url"]).strip().rstrip("/")
+        except Exception:
+            pass
+
     try:
         data = await perform_token_exchange(code=code, redirect_uri=redirect_uri)
         token = data["token"]
@@ -264,7 +357,7 @@ async def callback(request: Request, code: str, state: str = None):
         if wants_json:
             return {"success": True, **data}
 
-        return RedirectResponse(url=f"{settings.frontend_url}/auth/callback?token={token}&email={email}")
+        return RedirectResponse(url=f"{target_frontend}/auth/callback?token={token}&email={email}")
     except Exception as e:
         error_msg = getattr(e, "detail", str(e))
         print(f"[Auth Error] OAuth callback exception: {type(e).__name__}: {error_msg}")
@@ -277,7 +370,7 @@ async def callback(request: Request, code: str, state: str = None):
             raise HTTPException(status_code=status_code, detail=str(error_msg))
 
         encoded_err = urllib.parse.quote(str(error_msg))
-        return RedirectResponse(url=f"{settings.frontend_url}/login?error={encoded_err}")
+        return RedirectResponse(url=f"{target_frontend}/login?error={encoded_err}")
 
 async def get_current_user(request: Request):
     import hashlib

@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     # OAuth 2.0 Configuration
     google_client_id: str = ""
     google_client_secret: str = ""
-    redirect_uri: str = "http://localhost:8000/api/auth/callback"
-    frontend_url: str = "http://localhost:3000"
+    redirect_uri: str = "https://u-marketer.vercel.app/api/auth/callback" if os.environ.get("VERCEL") else "http://localhost:8000/api/auth/callback"
+    frontend_url: str = "https://u-marketer01.vercel.app" if os.environ.get("VERCEL") else "http://localhost:3000"
     
     # Security
     encryption_key: str = ""  # Used for encrypting stored tokens
