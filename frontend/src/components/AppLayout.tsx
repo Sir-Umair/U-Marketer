@@ -11,7 +11,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthCheck>
       {isAuthPage ? (
-        <main>{children}</main>
+        <main style={{ width: '100%', minHeight: '100dvh', overflowX: 'hidden' }}>{children}</main>
       ) : (
         <div className="app-container">
           <Sidebar />
