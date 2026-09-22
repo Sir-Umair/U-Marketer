@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { api } from '@/lib/api';
+import { api, getApiBaseUrl } from '@/lib/api';
 
 export default function DeveloperPortalPage() {
   const [user, setUser] = useState<any>(null);
@@ -91,16 +91,17 @@ export default function DeveloperPortalPage() {
   };
 
   const sampleKey = apiKeys.length > 0 ? apiKeys[0].prefix : 'sk_live_abcdef1234567890';
+  const baseUrl = getApiBaseUrl();
 
   const snippets = {
-    curl: `curl -X POST "http://localhost:8000/emails/generate-content" \\
+    curl: `curl -X POST "${baseUrl}/emails/generate-content" \\
   -H "Authorization: Bearer ${sampleKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"prompt": "Write a friendly cold outreach email to a SaaS founder"}'`,
 
     python: `import requests
 
-url = "http://localhost:8000/emails/send-bulk"
+url = "${baseUrl}/emails/send-bulk"
 headers = {
     "Authorization": "Bearer ${sampleKey}"
 }
@@ -114,7 +115,7 @@ data = {
 response = requests.post(url, headers=headers, data=data)
 print(response.json())`,
 
-    javascript: `const response = await fetch('http://localhost:8000/leads/', {
+    javascript: `const response = await fetch('${baseUrl}/leads/', {
   method: 'POST',
   headers: {
     'X-API-Key': '${sampleKey}',

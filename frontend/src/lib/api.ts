@@ -1,8 +1,7 @@
-const getApiBaseUrl = () => {
+export const getApiBaseUrl = () => {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-  if (typeof window !== 'undefined') {
-    // In Windows / modern browsers, using 127.0.0.1 avoids IPv6 ::1 connection refused on localhost
-    return 'http://127.0.0.1:8000';
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://u-marketer.vercel.app';
   }
   return 'http://127.0.0.1:8000';
 };
@@ -21,15 +20,18 @@ async function safeFetch(path: string, options: RequestInit = {}): Promise<Respo
   try {
     return await fetch(url, options);
   } catch (err: any) {
-    // If failed, automatically fallback between 127.0.0.1 and localhost
-    const altUrl = url.includes('127.0.0.1:8000')
-      ? url.replace('127.0.0.1:8000', 'localhost:8000')
-      : url.replace('localhost:8000', '127.0.0.1:8000');
-    try {
-      return await fetch(altUrl, options);
-    } catch (fallbackErr: any) {
-      throw new Error(`Unable to connect to backend at ${url}. Please ensure the FastAPI server is running on port 8000.`);
+    // If failed in local dev, automatically fallback between 127.0.0.1 and localhost
+    if (url.includes('127.0.0.1:8000') || url.includes('localhost:8000')) {
+      const altUrl = url.includes('127.0.0.1:8000')
+        ? url.replace('127.0.0.1:8000', 'localhost:8000')
+        : url.replace('localhost:8000', '127.0.0.1:8000');
+      try {
+        return await fetch(altUrl, options);
+      } catch {
+        throw new Error(`Unable to connect to local backend at ${url}. Please ensure the FastAPI server is running on port 8000.`);
+      }
     }
+    throw new Error(`Unable to connect to backend at ${url}: ${err?.message || err}`);
   }
 }
 
